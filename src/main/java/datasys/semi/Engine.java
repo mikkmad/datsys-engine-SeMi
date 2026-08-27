@@ -17,6 +17,6 @@ public final class Engine {
     }
 
     String teamName() {
-        return "Team <your team name>";
+        return "Team SeMi";
     }
 }
