@@ -1,0 +1,30 @@
+{
+  "name": "datsys-devcontainer",
+  "dockerFile": "Dockerfile",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "25",
+      "jdkDistro": "tem",
+      "installMaven": "true",
+      "mavenVersion": "3.9.6"
+    }
+  },
+  "remoteUser": "root",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vscjava.vscode-java-pack",
+        "github.vscode-github-actions",
+        "usernamehw.errorlens",
+        "janisdd.vscode-edit-csv",
+        "ritwickdey.LiveServer",
+        "ms-vsliveshare.vsliveshare"
+      ]
+    }
+  },
+  "postCreateCommand": {
+    "java-check": "java --version",
+    "mvn-check": "mvn --version"
+  }
+}
