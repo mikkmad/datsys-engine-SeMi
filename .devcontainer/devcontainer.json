@@ -1,6 +1,6 @@
 {
   "name": "datsys-devcontainer",
-  "dockerFile": "Dockerfile",
+  "image": "mcr.microsoft.com/devcontainers/base:resolute",
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/java:1": {
@@ -10,7 +10,11 @@
       "mavenVersion": "3.9.6"
     }
   },
-  "remoteUser": "root",
+  // This is a workaround fix for https://github.com/devcontainers/features/issues/1480, when using an Atomic Host.
+  // Bug has been reported at: https://github.com/devcontainers/images/issues/1556#issuecomment-3338640346
+  "runArgs": [
+    "--tmpfs=/tmp:rw,exec,nosuid,nodev,mode=1777"
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
