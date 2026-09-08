@@ -16,6 +16,11 @@
   </properties>
 
   <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.20.0</version>
+    </dependency>
     <!-- Logging API: your code compiles only against SLF4J -->
     <dependency>
       <groupId>org.slf4j</groupId>

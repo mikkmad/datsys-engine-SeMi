@@ -86,7 +86,8 @@ Statistics are placed **in the catalog only**. This was chosen because it allows
 
 _OBS: Partition size **must be** a configurable parameter_.
 
-Default is: 16 MB (Subject to change.)
+The limit is measured in rows, not bytes. The default is 1024 rows. Tests can
+set a smaller limit through the `StorageEngine(Path, int)` constructor.
 
 ## Value encodings and framing:
 
@@ -99,7 +100,7 @@ Default is: 16 MB (Subject to change.)
   - 4-byte row count (`uint32`),
   - 2-byte column count (`uint16`)
 - A reader locates row data by seeking past the fixed-size header then reading rows sequentially in schema-defined column order.
-- No column chunck - since we are making a row store
+- No column chunk - since we are making a row store
 
 Example:
 ```txt
