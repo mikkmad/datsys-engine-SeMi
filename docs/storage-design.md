@@ -8,6 +8,54 @@
 - Data files are placed in a folder named after the table. That folder is placed in the "data" folder in the root directory, i.e. `./data`.
 - Root directory is the folder wherein the engine lives. I.e., if the engine lives in `~/tmp/SeMi`, then the catalogs and data folders will be in `~/tmp/SeMi/catalogs` and `~/tmp/SeMi/data`, respectively.
 
+Example of a Catalog file for a table named `users`:
+```
+{
+  "table": "users",
+  "schema": [
+    {
+      "column_name": "id",
+      "column_type": "LONG"
+    },
+    {
+      "column_name": "name",
+      "column_type": "STRING"
+    },
+    {
+      "column_name": "age",
+      "column_type": "LONG"
+    }
+  ],
+  "partitions": [
+    {
+      "path": "data/users/partition_0.dat",
+      "rowCount": 1000,
+      "statistics": {
+        "id": {
+          "min": 1,
+          "max": 1000
+        },
+        "age": {
+          "min": 18,
+          "max": 65
+        }
+      }
+    }
+  ]
+}
+```
+
+Directory and file-naming example:
+```txt
+<dataDirectory>/
+  catalogs/
+    users.json
+  data/
+    users/
+      partition-0.dat
+      partition-1.dat
+```
+
 ## Catalog contents:
 
 - Should contain the schema of the table.
@@ -24,11 +72,14 @@ Statistics are placed **in the catalog only**. This was chosen because it allows
 
 - The DBMS need to read the relevant catalog files based on which table the `select` query is asking for, and then read the relevant data files based on which partitions are needed to answer the query.
 
+## On Failure:
+- If parsing or writing fails, no new partition files are registered and the catalog remains unchanged.
+
 ## Layout inside a partition:
 
 - Will have a row-wise format.
 
-## Partition size: maximum rows per partition.
+## Partition size
 
 _OBS: Partition size **must be** a configurable parameter_.
 
@@ -38,7 +89,7 @@ Default is: 16 MB (Subject to change.)
 
 - `LONG` as 8-byte two's-complement
 - `DOUBLE` as 8-byte IEEE754
-- `STRING` as length-prefixed ASCII bytes
+- `STRING` as 4-byte length prefix followed by UTF-8 bytes
 - Each partition file begins with a fixed-size header consisting of:
   - Magic bytes: "SEMI" (0x53 0x45 0x4d 0x49)
   - 2-byte format version (`uint16`), 
@@ -47,7 +98,25 @@ Default is: 16 MB (Subject to change.)
 - A reader locates row data by seeking past the fixed-size header then reading rows sequentially in schema-defined column order.
 - No column chunck - since we are making a row store
 
+Example:
+```txt
+Header:
+4 bytes  magic: SEMI
+2 bytes  version: 1, unsigned big-endian
+4 bytes  row count, unsigned big-endian
+2 bytes  column count, unsigned big-endian
+
+Each LONG:
+8 bytes  two's-complement signed integer, big-endian
+
+Each DOUBLE:
+8 bytes  IEEE 754, big-endian
+
+Each STRING:
+4 bytes  byte length, unsigned big-endian
+N bytes  UTF-8 payload
+```
+
 ## Byte order: ByteBuffer defaults to big-endian, while the machines you run on are little-endian.
 
-// TODO: Fix this. 
-Pick one and document the choice.
+We have chosen to go with Big-Endian as it is Java's Default. It is convenient to use, as we will not have to explicitly state the byte order when using ByteBuffer, as it defaults to Big-Endian.
