@@ -48,6 +48,14 @@ Example of a Catalog file for a table named `users`:
 }
 ```
 
+## Catalog contents:
+
+- Should contain the schema of the table.
+- Should contain the relative path for the `.dat` file that contain the data for each partition. I.e. there is a `.dat` file for each partition
+- Should contain the statistics for all the partitions of that table (note: for much larger codebases, these should be placed elsewhere, e.g., in a separate statistics file).
+- Statistics consists of:
+  - min/max summaries per column per partition
+
 Directory and file-naming example:
 ```txt
 <dataDirectory>/
@@ -58,14 +66,6 @@ Directory and file-naming example:
       partition-0.dat
       partition-1.dat
 ```
-
-## Catalog contents:
-
-- Should contain the schema of the table.
-- Should contain the relative path for the `.dat` file that contain the data for each partition. I.e. there is a `.dat` file for each partition
-- Should contain the statistics for all the partitions of that table (note: for much larger codebases, these should be placed elsewhere, e.g., in a separate statistics file).
-- Statistics consists of:
-  - min/max summaries per column per partition
 
 ### Justification for placing statistics in the catalog
 
