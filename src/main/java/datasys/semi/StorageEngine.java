@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -198,6 +200,36 @@ public final class StorageEngine {
         };
     }
 
+    byte[] encodeValue(ColumnType type, Object value) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream output = new DataOutputStream(bytes);
+            writeValue(output, type, value);
+            output.flush();
+            return bytes.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not encode value", exception);
+        }
+    }
+
+    Object decodeValue(ColumnType type, byte[] bytes) {
+        try {
+            return readValue(new DataInputStream(new ByteArrayInputStream(bytes)), type);
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Could not decode value", exception);
+        }
+    }
+
+    MinMax minMax(List<Object> values) {
+        if (values == null || values.isEmpty()) {
+            throw new IllegalArgumentException("values must not be empty");
+        }
+        Comparator<Object> comparator = StorageEngine::compare;
+        Object min = values.stream().min(comparator).orElseThrow();
+        Object max = values.stream().max(comparator).orElseThrow();
+        return new MinMax(min, max);
+    }
+
     private void loadCatalogs() throws IOException {
         try (var paths = Files.list(catalogsDirectory)) {
             for (Path path : paths.filter(file -> file.toString().endsWith(".json")).toList()) {
@@ -263,11 +295,13 @@ public final class StorageEngine {
             int partitionNumber) {
         Map<String, Statistics> statistics = new HashMap<>();
         for (int column = 0; column < schema.size(); column++) {
-            Comparator<Object> comparator = (left, right) -> compare(left, right);
             int columnIndex = column;
-            Object min = rows.stream().map(row -> row[columnIndex]).min(comparator).orElseThrow();
-            Object max = rows.stream().map(row -> row[columnIndex]).max(comparator).orElseThrow();
-            statistics.put(schema.get(column).name, new Statistics(String.valueOf(min), String.valueOf(max)));
+            List<Object> values = rows.stream().map(row -> row[columnIndex]).toList();
+            MinMax columnStatistics = minMax(values);
+            Object min = columnStatistics.min;
+            Object max = columnStatistics.max;
+            statistics.put(schema.get(column).name,
+                    new Statistics(String.valueOf(columnStatistics.min), String.valueOf(columnStatistics.max)));
             log("table=%s partition=%d column=%s min=%s max=%s".formatted(
                     tableName, partitionNumber, schema.get(column).name, min, max));
         }
@@ -462,15 +496,18 @@ public final class StorageEngine {
     }
 
     public static final class Statistics {
-        public Object min;
-        public Object max;
+        public String min;
+        public String max;
 
         public Statistics() {
         }
 
         Statistics(Object min, Object max) {
-            this.min = min;
-            this.max = max;
+            this.min = String.valueOf(min);
+            this.max = String.valueOf(max);
         }
+    }
+
+    record MinMax(Object min, Object max) {
     }
 }

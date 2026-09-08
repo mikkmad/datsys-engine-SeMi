@@ -1,5 +1,10 @@
 package datasys.semi;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,12 +13,46 @@ import org.slf4j.MDC;
 public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         MDC.put("sessionId", UUID.randomUUID().toString());
         MDC.put("statementNumber", "0");
         LOGGER.debug("engine started");
-        System.out.println(new Engine().teamName());
+        Path demoDirectory = Path.of(System.getProperty("user.dir"), "semi-demo");
+        deleteDirectory(demoDirectory);
+        Files.createDirectories(demoDirectory);
+        Path csvFile = demoDirectory.resolve("trips.csv");
+        Files.writeString(csvFile, "Copenhagen,12,23.5\nAarhus,187,301.0\nOdense,95,120.75\n"
+                + "Copenhagen,140,210.0\nAalborg,210,340.5\nRoskilde,31,45.0\n"
+                + "Copenhagen,88,99.99\nEsbjerg,299,450.25\n");
+
+        StorageEngine storage = new StorageEngine(demoDirectory, 2);
+        storage.createTable("trips", List.of(
+                new ColumnSpec("city", ColumnType.STRING),
+                new ColumnSpec("distance", ColumnType.LONG),
+                new ColumnSpec("price", ColumnType.DOUBLE)));
+        storage.copyFile("trips", csvFile.toString());
+        System.out.println("distance > 100: " + format(storage.select(
+                "trips", "distance", Comparison.GREATER_THAN, 100L)));
+        System.out.println("city = Copenhagen: " + format(storage.select(
+                "trips", "city", Comparison.EQUALS, "Copenhagen")));
+        System.out.println("price < 50.0: " + format(storage.select(
+                "trips", "price", Comparison.LESS_THAN, 50.0)));
         LOGGER.debug("engine stopped");
+    }
+
+    private static void deleteDirectory(Path directory) throws IOException {
+        if (!Files.exists(directory)) {
+            return;
+        }
+        try (var paths = Files.walk(directory)) {
+            for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
+        }
+    }
+
+    private static String format(List<Object[]> rows) {
+        return rows.stream().map(row -> Arrays.toString(row)).toList().toString();
     }
 
     String teamName() {
