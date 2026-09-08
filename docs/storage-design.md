@@ -1,5 +1,8 @@
 # Storage Design
 
+- Version: 1.0
+- Date: 08/09/2026
+
 ## Catalog storage:
 
 - One catalog file per table
