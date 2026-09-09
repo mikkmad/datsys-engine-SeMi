@@ -86,7 +86,7 @@ Statistics are placed **in the catalog only**. This was chosen because it allows
 
 _OBS: Partition size **must be** a configurable parameter_.
 
-The limit is measured in rows, not bytes. The default is 1024 rows. Tests can
+The default is 1024 rows. Tests can
 set a smaller limit through the `StorageEngine(Path, int)` constructor.
 
 ## Value encodings and framing:
