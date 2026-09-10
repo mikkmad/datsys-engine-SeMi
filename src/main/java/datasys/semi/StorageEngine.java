@@ -218,6 +218,20 @@ public final class StorageEngine {
         return lastScanStats;
     }
 
+    /**
+     * Returns the table's schema, in column order.
+     *
+     * @param tableName the name of the table to look up
+     * @return list of column specifications in column order
+     * @throws IllegalArgumentException if the table is unknown or tableName is null
+     */
+    public List<ColumnSpec> schema(String tableName) {
+        Catalog catalog = requireCatalog(tableName);
+        return catalog.schema.stream()
+                .map(column -> new ColumnSpec(column.name, ColumnType.valueOf(column.type)))
+                .toList();
+    }
+
     // --- Package-Private Methods (Visible for Unit Testing) ---
 
     Object[] parseCsvLine(String line, String fileName, int lineNumber, List<Column> schema) {
