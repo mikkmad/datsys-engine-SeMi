@@ -18,6 +18,7 @@ This document defines the strict engineering standards, architectural patterns, 
 - Production Code: [`src/main/java/datasys/semi/`](file:///workspaces/datsys-engine-SeMi/src/main/java/datasys/semi)
 - Test Code: [`src/test/java/datasys/semi/`](file:///workspaces/datsys-engine-SeMi/src/test/java/datasys/semi)
 - Exercise Specifications: [`exercise_descriptions/`](file:///workspaces/datsys-engine-SeMi/exercise_descriptions)
+- Design Documentations: [`docs/`](file:///workspaces/datsys-engine-SeMi/docs)
 - Implementation Plans: [`agents/implementation_plans/`](file:///workspaces/datsys-engine-SeMi/agents/implementation_plans)
 - Walkthroughs: [`agents/walkthroughs/`](file:///workspaces/datsys-engine-SeMi/agents/walkthroughs)
 - Engine Logs: [`logs/`](file:///workspaces/datsys-engine-SeMi/logs) (contains one dedicated log file per session)
