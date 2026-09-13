@@ -1,4 +1,6 @@
-package datasys.semi;
+package datasys.semi.engine;
+
+import datasys.semi.schema.*;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
@@ -24,7 +26,8 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
+
+import datasys.semi.models.ScanStats;
 
 public final class StorageEngine {
 
@@ -71,7 +74,8 @@ public final class StorageEngine {
     }
 
     public void createTable(String tableName, List<ColumnSpec> columns) {
-        log("api=createTable table=%s".formatted(tableName));
+        LOGGER.debug("api=createTable table=%s".formatted(tableName));
+
         requireTableName(tableName);
 
         if (columns == null || columns.isEmpty()) {
@@ -94,11 +98,11 @@ public final class StorageEngine {
         writeCatalog(catalog);
         catalogs.put(tableName, catalog);
 
-        log("table=%s columns=%d".formatted(tableName, schema.size()));
+        LOGGER.debug("table=%s columns=%d".formatted(tableName, schema.size()));
     }
 
     public void copyFile(String tableName, String csvFilePath) {
-        log("api=copyFile table=%s file=%s".formatted(tableName, csvFilePath));
+        LOGGER.debug("api=copyFile table=%s file=%s".formatted(tableName, csvFilePath));
         Catalog catalog = requireCatalog(tableName);
 
         if (!catalog.partitions.isEmpty()) {
@@ -149,7 +153,7 @@ public final class StorageEngine {
             writeCatalog(updated);
             catalogs.put(tableName, updated);
 
-            log("table=%s file=%s rows=%d partitions=%d durationMs=%d".formatted(
+            LOGGER.debug("table=%s file=%s rows=%d partitions=%d durationMs=%d".formatted(
                     tableName, Path.of(csvFilePath).getFileName(), rows.size(), partitions.size(),
                     elapsedMillis(started)));
 
@@ -160,7 +164,7 @@ public final class StorageEngine {
     }
 
     public List<Object[]> select(String tableName, String columnName, Comparison comparison, Object constant) {
-        log("api=select table=%s column=%s comparison=%s const=%s".formatted(tableName, columnName, comparison,
+        LOGGER.debug("api=select table=%s column=%s comparison=%s const=%s".formatted(tableName, columnName, comparison,
                 constant));
         Catalog catalog = requireCatalog(tableName);
 
@@ -183,7 +187,7 @@ public final class StorageEngine {
             Object max = parseStatistic(statistics.max, type);
 
             boolean shouldPrune = shouldPrune(type, comparison, constant, min, max);
-            log("table=%s column=%s comparison=%s const=%s partition=%d min=%s max=%s decision=%s".formatted(
+            LOGGER.debug("table=%s column=%s comparison=%s const=%s partition=%d min=%s max=%s decision=%s".formatted(
                     tableName, columnName, comparison, constant, partitionNumber, statistics.min, statistics.max,
                     shouldPrune ? "PRUNED" : "READ"));
 
@@ -207,9 +211,10 @@ public final class StorageEngine {
 
         lastScanStats = new ScanStats(catalog.partitions.size(), read, pruned);
 
-        log("table=%s column=%s comparison=%s const=%s partitionsRead=%d partitionsPruned=%d rowsOut=%d durationMs=%d"
-                .formatted(tableName, columnName, comparison, constant, read, pruned, result.size(),
-                        elapsedMillis(started)));
+        LOGGER.debug(
+                "table=%s column=%s comparison=%s const=%s partitionsRead=%d partitionsPruned=%d rowsOut=%d durationMs=%d"
+                        .formatted(tableName, columnName, comparison, constant, read, pruned, result.size(),
+                                elapsedMillis(started)));
 
         return result;
     }
@@ -218,9 +223,23 @@ public final class StorageEngine {
         return lastScanStats;
     }
 
+    /**
+     * Returns the table's schema, in column order.
+     *
+     * @param tableName the name of the table to look up
+     * @return list of column specifications in column order
+     * @throws IllegalArgumentException if the table is unknown or tableName is null
+     */
+    public List<ColumnSpec> schema(String tableName) {
+        Catalog catalog = requireCatalog(tableName);
+        return catalog.schema.stream()
+                .map(column -> new ColumnSpec(column.name, ColumnType.valueOf(column.type)))
+                .toList();
+    }
+
     // --- Package-Private Methods (Visible for Unit Testing) ---
 
-    Object[] parseCsvLine(String line, String fileName, int lineNumber, List<Column> schema) {
+    public Object[] parseCsvLine(String line, String fileName, int lineNumber, List<Column> schema) {
         String[] fields = line.split(",", -1);
         if (fields.length != schema.size()) {
             throw parseError(fileName, lineNumber, "expected " + schema.size() + " fields but found " + fields.length);
@@ -238,7 +257,7 @@ public final class StorageEngine {
         return values;
     }
 
-    boolean shouldPrune(ColumnType type, Comparison comparison, Object constant, Object min, Object max) {
+    public boolean shouldPrune(ColumnType type, Comparison comparison, Object constant, Object min, Object max) {
         int lower = compare(constant, min);
         int upper = compare(constant, max);
 
@@ -249,7 +268,7 @@ public final class StorageEngine {
         };
     }
 
-    byte[] encodeValue(ColumnType type, Object value) {
+    public byte[] encodeValue(ColumnType type, Object value) {
         try {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             DataOutputStream output = new DataOutputStream(bytes);
@@ -263,7 +282,7 @@ public final class StorageEngine {
         }
     }
 
-    Object decodeValue(ColumnType type, byte[] bytes) {
+    public Object decodeValue(ColumnType type, byte[] bytes) {
         try {
             return readValue(new DataInputStream(new ByteArrayInputStream(bytes)), type);
         } catch (IOException exception) {
@@ -271,7 +290,7 @@ public final class StorageEngine {
         }
     }
 
-    MinMax minMax(List<Object> values) {
+    public MinMax minMax(List<Object> values) {
         if (values == null || values.isEmpty()) {
             throw new IllegalArgumentException("values must not be empty");
         }
@@ -368,7 +387,7 @@ public final class StorageEngine {
             statistics.put(schema.get(column).name,
                     new Statistics(String.valueOf(columnStatistics.min), String.valueOf(columnStatistics.max)));
 
-            log("table=%s partition=%d column=%s min=%s max=%s".formatted(
+            LOGGER.debug("table=%s partition=%d column=%s min=%s max=%s".formatted(
                     tableName, partitionNumber, schema.get(column).name, min, max));
         }
 
@@ -498,7 +517,7 @@ public final class StorageEngine {
         try {
             Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (AtomicMoveNotSupportedException exception) {
-            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+            throw new IOException("Atomic move not supported on this file system", exception);
         }
     }
 
@@ -513,16 +532,6 @@ public final class StorageEngine {
 
     private static long elapsedMillis(long started) {
         return (System.nanoTime() - started) / 1_000_000;
-    }
-
-    private static void log(String message) {
-        if (MDC.get("sessionId") == null) {
-            MDC.put("sessionId", UUID.randomUUID().toString());
-        }
-        if (MDC.get("statementNumber") == null) {
-            MDC.put("statementNumber", "0");
-        }
-        LOGGER.debug(message.replace(',', ';'));
     }
 
     // --- Catalog & Storage Data Models ---
@@ -552,7 +561,7 @@ public final class StorageEngine {
         public Column() {
         }
 
-        Column(String name, String type) {
+        public Column(String name, String type) {
             this.name = name;
             this.type = type;
         }
@@ -586,6 +595,6 @@ public final class StorageEngine {
         }
     }
 
-    record MinMax(Object min, Object max) {
+    public static record MinMax(Object min, Object max) {
     }
 }

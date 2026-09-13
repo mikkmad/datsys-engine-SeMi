@@ -1,4 +1,4 @@
-package datasys.semi;
+package datasys.semi.schema;
 
 public enum Comparison {
     EQUALS,
