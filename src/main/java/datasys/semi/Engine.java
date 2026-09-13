@@ -7,6 +7,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import datasys.semi.models.Statement;
+import datasys.semi.parser.SqlParser;
+import datasys.semi.parser.SqlPrinter;
+
 /**
  * Main command-line entry point demonstrating the SQL front-end parsing and
  * pretty-printing.
@@ -48,7 +52,7 @@ public final class Engine {
      *
      * @return team name string
      */
-    String teamName() {
+    public String teamName() {
         return "Team SeMi";
     }
 }

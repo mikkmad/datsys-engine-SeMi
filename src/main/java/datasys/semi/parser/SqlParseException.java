@@ -1,4 +1,4 @@
-package datasys.semi;
+package datasys.semi.parser;
 
 /**
  * Exception thrown when SQL parsing encounters a syntax or lexical error.

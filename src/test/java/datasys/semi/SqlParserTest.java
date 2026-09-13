@@ -5,10 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import datasys.semi.models.*;
+import datasys.semi.schema.*;
+
 import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+
+import datasys.semi.models.Statement;
+import datasys.semi.parser.SqlParseException;
+import datasys.semi.parser.SqlParser;
 
 /**
  * Unit tests for the SqlParser facade validating AST construction, typing, and

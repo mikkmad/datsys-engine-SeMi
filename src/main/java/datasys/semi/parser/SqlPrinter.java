@@ -1,6 +1,8 @@
-package datasys.semi;
+package datasys.semi.parser;
 
 import java.util.stream.Collectors;
+
+import datasys.semi.models.*;
 
 /**
  * Pretty-printer rendering AST Statement records back to canonical SQL text.

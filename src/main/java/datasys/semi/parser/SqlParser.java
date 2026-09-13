@@ -1,4 +1,4 @@
-package datasys.semi;
+package datasys.semi.parser;
 
 import java.util.List;
 import java.util.UUID;
@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import datasys.semi.models.Statement;
 import datasys.semi.sql.SqlLexer;
 
 /**
@@ -34,18 +35,18 @@ public final class SqlParser {
      * @throws SqlParseException        if a lexical or grammatical syntax error
      *                                  occurs
      */
-    @SuppressWarnings("unchecked")
     public List<Statement> parse(String sqlText) {
         if (sqlText == null) {
             throw new IllegalArgumentException("SQL text must not be null");
         }
 
-        ensureMdcContext();
         long startNanoTime = System.nanoTime();
 
         try {
             datasys.semi.sql.SqlParser antlrParser = createAntlrParser(sqlText);
             datasys.semi.sql.SqlParser.ScriptContext scriptContext = antlrParser.script();
+
+            @SuppressWarnings("unchecked")
             List<Statement> statements = (List<Statement>) new SqlAstBuilder().visit(scriptContext);
 
             long durationInMs = calculateElapsedMillis(startNanoTime);
@@ -81,18 +82,6 @@ public final class SqlParser {
         parser.addErrorListener(SqlErrorListener.INSTANCE);
 
         return parser;
-    }
-
-    /**
-     * Initializes logging MDC context with sessionId and statementNumber if absent.
-     */
-    private static void ensureMdcContext() {
-        if (MDC.get("sessionId") == null) {
-            MDC.put("sessionId", UUID.randomUUID().toString());
-        }
-        if (MDC.get("statementNumber") == null) {
-            MDC.put("statementNumber", "0");
-        }
     }
 
     /**

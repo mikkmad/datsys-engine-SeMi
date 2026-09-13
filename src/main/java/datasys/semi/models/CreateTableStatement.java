@@ -1,4 +1,6 @@
-package datasys.semi;
+package datasys.semi.models;
+
+import datasys.semi.schema.*;
 
 import java.util.List;
 

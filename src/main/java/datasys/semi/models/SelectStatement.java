@@ -1,4 +1,4 @@
-package datasys.semi;
+package datasys.semi.models;
 
 import java.util.Optional;
 

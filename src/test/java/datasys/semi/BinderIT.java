@@ -10,6 +10,11 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import datasys.semi.models.*;
+import datasys.semi.parser.Binder;
+import datasys.semi.schema.*;
+import datasys.semi.engine.StorageEngine;
+
 /**
  * Integration tests validating the catalog Binder against a temporary
  * StorageEngine.

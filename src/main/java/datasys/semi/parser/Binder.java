@@ -1,8 +1,16 @@
-package datasys.semi;
+package datasys.semi.parser;
 
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+
+import datasys.semi.engine.StorageEngine;
+import datasys.semi.models.CreateTableStatement;
+import datasys.semi.models.SelectStatement;
+import datasys.semi.models.CopyStatement;
+import datasys.semi.models.Predicate;
+import datasys.semi.models.Statement;
+import datasys.semi.schema.*;
 
 /**
  * Validates AST statements against the schema catalog of a StorageEngine.

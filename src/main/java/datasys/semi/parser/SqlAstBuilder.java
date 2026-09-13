@@ -1,11 +1,14 @@
-package datasys.semi;
+package datasys.semi.parser;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import datasys.semi.models.Statement;
 import datasys.semi.sql.SqlBaseVisitor;
 import datasys.semi.sql.SqlParser;
+import datasys.semi.schema.*;
+import datasys.semi.models.*;
 
 /**
  * Visitor implementation translating ANTLR parse tree nodes into strongly-typed

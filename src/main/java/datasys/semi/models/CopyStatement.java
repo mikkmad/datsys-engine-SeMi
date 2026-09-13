@@ -1,4 +1,4 @@
-package datasys.semi;
+package datasys.semi.models;
 
 /**
  * AST record representing a COPY statement.

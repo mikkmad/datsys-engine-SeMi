@@ -1,4 +1,6 @@
-package datasys.semi;
+package datasys.semi.models;
+
+import datasys.semi.schema.*;
 
 /**
  * AST record representing a binary predicate condition in a WHERE clause.

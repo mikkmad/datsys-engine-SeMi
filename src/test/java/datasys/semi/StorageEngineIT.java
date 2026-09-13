@@ -15,6 +15,10 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import datasys.semi.models.*;
+import datasys.semi.schema.*;
+import datasys.semi.engine.*;
+
 class StorageEngineIT {
 
     private static final List<ColumnSpec> SCHEMA = List.of(

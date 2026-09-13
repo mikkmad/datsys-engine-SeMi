@@ -7,6 +7,11 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import datasys.semi.models.*;
+import datasys.semi.parser.SqlParser;
+import datasys.semi.parser.SqlPrinter;
+import datasys.semi.schema.*;
+
 /**
  * Unit tests verifying the round-trip parse(print(s)) property for all
  * statement shapes and literal types.

@@ -1,4 +1,4 @@
-package datasys.semi;
+package datasys.semi.parser;
 
 import org.antlr.v4.runtime.BaseErrorListener;
 import org.antlr.v4.runtime.RecognitionException;
