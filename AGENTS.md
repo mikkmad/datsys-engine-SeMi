@@ -21,7 +21,7 @@ This document defines the strict engineering standards, architectural patterns, 
 - Design Documentations: [`docs/`](file:///workspaces/datsys-engine-SeMi/docs)
 - Implementation Plans: [`agents/implementation_plans/`](file:///workspaces/datsys-engine-SeMi/agents/implementation_plans)
 - Walkthroughs: [`agents/walkthroughs/`](file:///workspaces/datsys-engine-SeMi/agents/walkthroughs)
-- Engine Logs: [`logs/`](file:///workspaces/datsys-engine-SeMi/logs) (contains one dedicated log file per session)
+- Engine Logs: [`logs/`](file:///workspaces/datsys-engine-SeMi/logs) (one giant log file, split automatically by log4j2 configuration)
 
 ---
 
@@ -198,7 +198,7 @@ public final class PartitionManager {
 All logging in the engine must adhere strictly to the format defined in [`exercise_descriptions/Exercise1.md`](file:///workspaces/datsys-engine-SeMi/exercise_descriptions/Exercise1.md). The engine will subsequently analyze its own log files using `COPY` and `SELECT` commands; the log file is a machine-readable CSV.
 
 ### 5.1 Per-Session Log Files & CSV Schema
-- **Dedicated Session Logs**: The engine must **not** log to a single monolithic log file. Instead, each engine execution session writes to its own dedicated log file (e.g., `logs/engine-<sessionId>.log` or configured dynamically per session).
+- **Dedicated Session Logs**: The engine must log to a single monolithic log file. The log file is automatically split by the Log4j2 configuration.
 - **Mandatory CSV Schema**:
   Every log entry written to a session log file conforms to:
   ```
