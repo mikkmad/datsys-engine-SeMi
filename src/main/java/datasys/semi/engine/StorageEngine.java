@@ -237,6 +237,49 @@ public final class StorageEngine {
                 .toList();
     }
 
+    /**
+     * Reads every row of one partition. No predicate is involved: this is the plain
+     * read the scan operator performs once the planner has chosen the partition.
+     *
+     * @param tableName the table owning the partition
+     * @param partition the partition to read, as taken from {@link #partitions}
+     * @return all rows of the partition, in file order and schema column order
+     * @throws IllegalArgumentException if the table is unknown or partition is null
+     * @throws IllegalStateException    if the partition file cannot be read
+     */
+    public List<Object[]> readPartition(String tableName, Partition partition) {
+        Catalog catalog = requireCatalog(tableName);
+        if (partition == null) {
+            throw new IllegalArgumentException("partition must not be null");
+        }
+
+        try {
+            return readRows(dataDirectory.resolve(partition.path), catalog.schema);
+        } catch (IOException exception) {
+            LOGGER.error("api=readPartition table={} partition={} failed", tableName, partition.path, exception);
+            throw new IllegalStateException("Could not read partition " + partition.path, exception);
+        }
+    }
+
+    /**
+     * Reads every row of a catalog partition selected by its zero-based number.
+     *
+     * @param tableName       the table owning the partition
+     * @param partitionNumber zero-based partition number in catalog order
+     * @return all rows of the partition, in file order and schema column order
+     * @throws IllegalArgumentException if the table is unknown or the partition
+     *                                  number is outside the catalog range
+     * @throws IllegalStateException    if the partition file cannot be read
+     */
+    public List<Object[]> readPartition(String tableName, int partitionNumber) {
+        Catalog catalog = requireCatalog(tableName);
+        if (partitionNumber < 0 || partitionNumber >= catalog.partitions.size()) {
+            throw new IllegalArgumentException("partition number out of range: " + partitionNumber);
+        }
+
+        return readPartition(tableName, catalog.partitions.get(partitionNumber));
+    }
+
     // --- Package-Private Methods (Visible for Unit Testing) ---
 
     public Object[] parseCsvLine(String line, String fileName, int lineNumber, List<Column> schema) {
@@ -341,8 +384,40 @@ public final class StorageEngine {
         }
     }
 
+    /**
+     * Reads a partition file and keeps only the rows satisfying the predicate.
+     *
+     * @param path            the partition data file to read
+     * @param schema          the table schema, in column order
+     * @param predicateColumn zero-based index of the column the predicate tests
+     * @param comparison      comparison operator to apply
+     * @param constant        typed literal to compare against
+     * @return the matching rows, in file order
+     * @throws IOException if the file cannot be read or its header is invalid
+     */
     private List<Object[]> readMatchingRows(Path path, List<Column> schema, int predicateColumn,
             Comparison comparison, Object constant) throws IOException {
+        List<Object[]> rows = new ArrayList<>();
+
+        for (Object[] row : readRows(path, schema)) {
+            if (matches(row[predicateColumn], comparison, constant)) {
+                rows.add(row);
+            }
+        }
+
+        return rows;
+    }
+
+    /**
+     * Decodes every row of a partition file. This is the single place the binary
+     * partition format is read; callers that need a subset filter afterwards.
+     *
+     * @param path   the partition data file to read
+     * @param schema the table schema, in column order
+     * @return all rows of the partition, in file order
+     * @throws IOException if the file cannot be read or its header is invalid
+     */
+    private List<Object[]> readRows(Path path, List<Column> schema) throws IOException {
         List<Object[]> rows = new ArrayList<>();
 
         try (DataInputStream input = new DataInputStream(Files.newInputStream(path))) {
@@ -362,10 +437,7 @@ public final class StorageEngine {
                 for (int column = 0; column < schema.size(); column++) {
                     row[column] = readValue(input, ColumnType.valueOf(schema.get(column).type));
                 }
-
-                if (matches(row[predicateColumn], comparison, constant)) {
-                    rows.add(row);
-                }
+                rows.add(row);
             }
         }
 
