@@ -36,11 +36,9 @@ class ScanOperatorTest {
     @Test
     void returnsExactlyTheRowsOfThePartitionsItIsHanded(@TempDir Path directory) throws IOException {
         StorageEngine engine = loadGoldenTable(directory);
-        List<StorageEngine.Partition> partitions = engine.partitions("trips");
-        assertEquals(4, partitions.size());
 
         // Handed partitions 1 and 3 of 4: rows 3-4 and 7-8 of trips_sorted.csv.
-        Operator scan = new ScanOperator(engine, "trips", List.of(partitions.get(1), partitions.get(3)));
+        Operator scan = new ScanOperator(engine, "trips", List.of(1, 3));
 
         Object[][] expected = {
                 { "Copenhagen", 88L, 99.99 },

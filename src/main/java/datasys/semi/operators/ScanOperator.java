@@ -1,5 +1,7 @@
 package datasys.semi.operators;
 
+import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -30,13 +32,12 @@ public final class ScanOperator implements Operator {
     // --- Scan Target ---
     private final StorageEngine engine;
     private final String tableName;
-    private final List<StorageEngine.Partition> partitions;
+    private final List<Integer> partitionNumbers;
 
     // --- Cursor State ---
     private boolean opened;
     private int nextPartitionIndex;
-    private List<Object[]> bufferedRows = List.of();
-    private int nextRowIndex;
+    private Iterator<Object[]> rows = Collections.emptyIterator();
 
     // --- Observable Metrics ---
     private int partitionsOpened;
@@ -45,27 +46,27 @@ public final class ScanOperator implements Operator {
     /**
      * Constructs a scan over an explicit list of partitions.
      *
-     * @param engine     storage engine owning the table's data files
-     * @param tableName  name of the table being scanned
-     * @param partitions the partitions to read, in read order; may be empty but
-     *                   must not be null
-     * @throws IllegalArgumentException if engine or partitions is null, or
+     * @param engine           storage engine owning the table's data files
+     * @param tableName        name of the table being scanned
+     * @param partitionNumbers the zero-based partition numbers to read, in read
+     *                         order; may be empty but must not be null
+     * @throws IllegalArgumentException if engine or partitionNumbers is null, or
      *                                  tableName is null or blank
      */
-    public ScanOperator(StorageEngine engine, String tableName, List<StorageEngine.Partition> partitions) {
+    public ScanOperator(StorageEngine engine, String tableName, List<Integer> partitionNumbers) {
         if (engine == null) {
             throw new IllegalArgumentException("engine must not be null");
         }
         if (tableName == null || tableName.isBlank()) {
             throw new IllegalArgumentException("table name must not be null or blank");
         }
-        if (partitions == null) {
-            throw new IllegalArgumentException("partition list must not be null");
+        if (partitionNumbers == null) {
+            throw new IllegalArgumentException("partition number list must not be null");
         }
 
         this.engine = engine;
         this.tableName = tableName;
-        this.partitions = List.copyOf(partitions);
+        this.partitionNumbers = List.copyOf(partitionNumbers);
     }
 
     /**
@@ -81,10 +82,9 @@ public final class ScanOperator implements Operator {
 
         opened = true;
         nextPartitionIndex = 0;
-        bufferedRows = List.of();
-        nextRowIndex = 0;
+        rows = Collections.emptyIterator();
 
-        LOGGER.debug("operator=Scan table={} partitions={}", tableName, partitions.size());
+        LOGGER.debug("operator=Scan table={} partitions={}", tableName, partitionNumbers.size());
     }
 
     /**
@@ -99,15 +99,15 @@ public final class ScanOperator implements Operator {
     public Object[] next() {
         requireOpen();
 
-        while (nextRowIndex >= bufferedRows.size()) {
-            if (nextPartitionIndex >= partitions.size()) {
+        while (!rows.hasNext()) {
+            if (nextPartitionIndex >= partitionNumbers.size()) {
                 return null;
             }
             bufferNextPartition();
         }
 
         rowsOut++;
-        return bufferedRows.get(nextRowIndex++);
+        return rows.next();
     }
 
     /**
@@ -119,8 +119,7 @@ public final class ScanOperator implements Operator {
     public void close() {
         requireOpen();
 
-        bufferedRows = List.of();
-        nextRowIndex = 0;
+        rows = Collections.emptyIterator();
 
         LOGGER.debug("operator=Scan table={} partitionsRead={} rowsOut={}",
                 tableName, partitionsOpened, rowsOut);
@@ -130,10 +129,9 @@ public final class ScanOperator implements Operator {
      * Reads the next partition into the row buffer and resets the row cursor.
      */
     private void bufferNextPartition() {
-        StorageEngine.Partition partition = partitions.get(nextPartitionIndex++);
+        int partitionNumber = partitionNumbers.get(nextPartitionIndex++);
 
-        bufferedRows = engine.readPartition(tableName, partition);
-        nextRowIndex = 0;
+        rows = engine.readPartition(tableName, partitionNumber).iterator();
         partitionsOpened++;
     }
 

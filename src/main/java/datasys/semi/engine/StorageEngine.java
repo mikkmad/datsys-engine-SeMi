@@ -238,19 +238,6 @@ public final class StorageEngine {
     }
 
     /**
-     * Returns the table's partitions, in catalog order. The planner reads their
-     * min/max summaries to decide which of them a query must touch.
-     *
-     * @param tableName the name of the table to look up
-     * @return unmodifiable list of partitions in catalog order, possibly empty
-     * @throws IllegalArgumentException if the table is unknown or tableName is null
-     */
-    public List<Partition> partitions(String tableName) {
-        Catalog catalog = requireCatalog(tableName);
-        return List.copyOf(catalog.partitions);
-    }
-
-    /**
      * Reads every row of one partition. No predicate is involved: this is the plain
      * read the scan operator performs once the planner has chosen the partition.
      *
@@ -272,6 +259,25 @@ public final class StorageEngine {
             LOGGER.error("api=readPartition table={} partition={} failed", tableName, partition.path, exception);
             throw new IllegalStateException("Could not read partition " + partition.path, exception);
         }
+    }
+
+    /**
+     * Reads every row of a catalog partition selected by its zero-based number.
+     *
+     * @param tableName       the table owning the partition
+     * @param partitionNumber zero-based partition number in catalog order
+     * @return all rows of the partition, in file order and schema column order
+     * @throws IllegalArgumentException if the table is unknown or the partition
+     *                                  number is outside the catalog range
+     * @throws IllegalStateException    if the partition file cannot be read
+     */
+    public List<Object[]> readPartition(String tableName, int partitionNumber) {
+        Catalog catalog = requireCatalog(tableName);
+        if (partitionNumber < 0 || partitionNumber >= catalog.partitions.size()) {
+            throw new IllegalArgumentException("partition number out of range: " + partitionNumber);
+        }
+
+        return readPartition(tableName, catalog.partitions.get(partitionNumber));
     }
 
     // --- Package-Private Methods (Visible for Unit Testing) ---
@@ -381,11 +387,11 @@ public final class StorageEngine {
     /**
      * Reads a partition file and keeps only the rows satisfying the predicate.
      *
-     * @param path           the partition data file to read
-     * @param schema         the table schema, in column order
+     * @param path            the partition data file to read
+     * @param schema          the table schema, in column order
      * @param predicateColumn zero-based index of the column the predicate tests
-     * @param comparison     comparison operator to apply
-     * @param constant       typed literal to compare against
+     * @param comparison      comparison operator to apply
+     * @param constant        typed literal to compare against
      * @return the matching rows, in file order
      * @throws IOException if the file cannot be read or its header is invalid
      */
