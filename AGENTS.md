@@ -21,7 +21,7 @@ This document defines the strict engineering standards, architectural patterns, 
 - Design Documentations: [`docs/`](file:///workspaces/datsys-engine-SeMi/docs)
 - Implementation Plans: [`agents/implementation_plans/`](file:///workspaces/datsys-engine-SeMi/agents/implementation_plans)
 - Walkthroughs: [`agents/walkthroughs/`](file:///workspaces/datsys-engine-SeMi/agents/walkthroughs)
-- Engine Logs: [`logs/`](file:///workspaces/datsys-engine-SeMi/logs) (contains one dedicated log file per session)
+- Engine Logs: [`logs/`](file:///workspaces/datsys-engine-SeMi/logs) (one giant log file, split automatically by log4j2 configuration)
 
 ---
 
@@ -193,12 +193,12 @@ public final class PartitionManager {
 
 ---
 
-## 5. Logging Standards (Exercise 1 §3 Specification)
+## 5. Logging Standards & Front Door I/O (Exercises 1 & 4 Specifications)
 
-All logging in the engine must adhere strictly to the format defined in [`exercise_descriptions/Exercise1.md`](file:///workspaces/datsys-engine-SeMi/exercise_descriptions/Exercise1.md). The engine will subsequently analyze its own log files using `COPY` and `SELECT` commands; the log file is a machine-readable CSV.
+All logging in the engine must adhere strictly to the format defined in [`exercise_descriptions/Exercise1.md`](file:///workspaces/SeMi/exercise_descriptions/Exercise1.md) and [`exercise_descriptions/Exercise4.md`](file:///workspaces/SeMi/exercise_descriptions/Exercise4.md). The engine will subsequently analyze its own log files using `COPY` and `SELECT` commands; the log file is a machine-readable CSV.
 
 ### 5.1 Per-Session Log Files & CSV Schema
-- **Dedicated Session Logs**: The engine must **not** log to a single monolithic log file. Instead, each engine execution session writes to its own dedicated log file (e.g., `logs/engine-<sessionId>.log` or configured dynamically per session).
+- **Dedicated Session Logs**: The engine must log to a single monolithic log file. The log file is automatically split by the Log4j2 configuration.
 - **Mandatory CSV Schema**:
   Every log entry written to a session log file conforms to:
   ```
@@ -211,28 +211,73 @@ All logging in the engine must adhere strictly to the format defined in [`exerci
   ```
 
 ### 5.2 Contextual MDC Requirements
-- **`sessionId`** (`STRING`): Identifies an engine execution run. Generated once at startup using `UUID.randomUUID().toString()` and set into `MDC.put("sessionId", id)`.
+- **`sessionId`** (`STRING`): Identifies an engine execution run (a concrete run of the engine over one SQL statement or `.sql` script). Generated once at startup using `UUID.randomUUID().toString()` and set into `MDC.put("sessionId", id)`.
 - **`statementNumber`** (`LONG`): Sequence counter for SQL statements within a session.
-  - Must be initialized to `"0"` at startup.
-  - Zero indicates the log line does not belong to a specific SQL statement.
+  - Must be initialized to `"0"` at startup (engine startup, script-level parsing).
+  - The executor increments the counter before each SQL statement (the first statement of a script is `"1"`) and updates MDC via `MDC.put("statementNumber", String.valueOf(n))`.
+  - Every log line of a statement shares its number (e.g., `WHERE statementNumber = 7` reconstructs the entire statement lifecycle).
+  - Must be reset back to `"0"` when statement/script execution completes, ensuring engine shutdown logs remain outside the statement count.
+  - Zero indicates the log line does not belong to a specific SQL statement (`WHERE statementNumber > 0` isolates statement execution).
   - **Invariant**: Must never be null or empty, ensuring numeric parsing during subsequent log analysis.
-- **`className`** (`STRING`): Extracted automatically via `%logger{1}` from the SLF4J logger instance.
+- **`className`** (`STRING`): Extracted automatically via `%logger{1}` from the SLF4J logger instance. Note that pruning `decision=READ|PRUNED` log lines are emitted by the `Planner`, not the storage engine.
+- **MDC Ownership & Non-Interference Invariant**:
+  - `Engine.main` solely establishes and owns the MDC lifecycle (`sessionId`, `statementNumber="0"`).
+  - The SQL executor alone is permitted to update `statementNumber` during statement execution.
+  - **Strict prohibition**: No other engine component (storage engine, planner, operators, catalogs, codecs) may ever modify, clear (`MDC.clear()`), or remove MDC entries. The MDC context must remain strictly intact throughout the session.
 
 ### 5.3 Engine Log Levels (Strictly Two Levels)
-1. **`LOGGER.debug(...)`**: Used for normal operational flow (engine startup/shutdown, partition scans, cache lookups, statistics recording).
+1. **`LOGGER.debug(...)`**: Used for normal operational flow (engine startup/shutdown, partition pruning decisions, operator metrics, statement summaries).
 2. **`LOGGER.error(...)`**: Used for failures.
    - **Invariant**: Any thrown exception must leave at least one `LOGGER.error(...)` line in the active session's log file.
    - The course uses *only* `debug` and `error` in engine code. Avoid `info`, `warn`, or `trace`.
+   - **CSV Integrity Invariant (No Stack Traces / Single-Line Format)**:
+     - Never pass a `Throwable` to SLF4J (e.g., never call `LOGGER.error("...", e)`), as Log4j2 will append a multi-line stack trace that breaks the CSV layout and corrupts downstream CSV log parsing in Exercise 5.
+     - When a statement fails, log the statement type (e.g. `SELECT`, `COPY`, `CREATE_TABLE`) and the single-line error message:
+       ```java
+       LOGGER.error("statement={} error={}", statementType, e.getMessage());
+       ```
 
-### 5.4 CSV Message Hygiene
-- **Never include unescaped commas or line breaks** in `logMessage`.
-- Always use SLF4J parameterized logging:
+### 5.4 CSV Message Hygiene & Front Door I/O Contract
+- **Single-Line Log Messages**: Never include line breaks or unescaped commas in `logMessage` to ensure each log line remains a clean, valid CSV row.
+- Always use SLF4J parameterized logging.
+- **Standard Output & Error Restrictions (Front Door Contract)**:
+  - **`stdout` (Strictly CSV)**: Only headerless query result rows from `SELECT` go to `stdout`. Absolutely nothing else may appear on `stdout`.
+  - **`stderr`**: All human-readable error messages, console logs, and exception feedback are directed strictly to `stderr`.
+  - **Prohibited in Core Engine**: Never use `System.out.println` or `System.err.println` inside internal storage engine components, operators, or planners. Output formatting belongs exclusively in `Engine.java`.
+
+### 5.5 Standardized Operational Log Formats
+To preserve CSV parsability and support downstream log queries, use key-value formatting without commas:
+- **Statement Summary**: Emitted at statement completion:
   ```java
-  LOGGER.debug("Scanned partition {} with {} matching rows", partitionId, matchCount);
+  LOGGER.debug("statement={} table={} rowsOut={} durationMs={}", statementType, tableName, rowsOut, durationInMs);
   ```
-- **Standard Output Restrictions**:
-  - **Prohibited in Core Engine**: Never use `System.out.println` or `System.err.println` inside internal storage engine components (`StorageEngine.java`, partition managers, codecs, catalogs, etc.). All operational diagnostics, status, and errors must be recorded through SLF4J loggers.
-  - **Permitted in `Engine.java`**: `System.out.println` is explicitly permitted within the CLI entry point (`Engine.java`) to print query results and user-facing terminal output for future exercises.
+- **Filter Operator**: Emitted in `FilterOperator.close()`:
+  ```java
+  LOGGER.debug("rowsIn={} rowsOut={}", rowsIn, rowsOut);
+  ```
+- **Planner Pruning Decisions**: Emitted by the planner before data files are opened:
+  ```java
+  LOGGER.debug("decision={} partitionId={}", decision, partitionId);
+  ```
+
+### 5.6 Standardized Error Reporting & Stderr Formatting
+When an error occurs during parsing, binding, or execution:
+- **Standardized Exception Message**: The exception must be thrown with exact standardized messaging (containing no commas or newlines):
+  - **Constant Type Mismatch**:
+    ```
+    constant type mismatch for column <column>: expected <TYPE> got <TYPE>
+    ```
+    *(Example: `constant type mismatch for column distance: expected LONG got STRING`)*
+- **Front Door Error Handling (`Engine.java`)**:
+  - `Engine.main` catches the exception and prints the message directly to `stderr`:
+    ```java
+    System.err.println(e.getMessage());
+    ```
+  - `Engine.main` records the error in the session log using the statement type and error message (no stack traces, preserving CSV column alignment):
+    ```java
+    LOGGER.error("statement={} error={}", statementType, e.getMessage());
+    ```
+  - Errors printed to `stderr` must not contaminate `stdout`.
 
 ---
 
