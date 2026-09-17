@@ -80,7 +80,7 @@ public final class FilterOperator implements Operator {
         Object[] row;
         while ((row = child.next()) != null) {
             rowsIn++;
-            if (matches(row)) {
+            if (predicate.matches(row)) {
                 rowsOut++;
                 return row;
             }
@@ -102,41 +102,6 @@ public final class FilterOperator implements Operator {
                 predicate.columnIndex(), predicate.comparison(), predicate.constant(), rowsIn, rowsOut);
 
         child.close();
-    }
-
-    /**
-     * Tests one row's predicate column against the constant.
-     *
-     * @param row the candidate row in schema column order
-     * @return true if the row satisfies the predicate
-     * @throws IllegalArgumentException if the row is too short to hold the
-     *                                  predicate column
-     */
-    private boolean matches(Object[] row) {
-        if (row.length <= predicate.columnIndex()) {
-            throw new IllegalArgumentException("row has no column at index " + predicate.columnIndex());
-        }
-
-        int result = compare(row[predicate.columnIndex()], predicate.constant());
-        return switch (predicate.comparison()) {
-            case EQUALS -> result == 0;
-            case LESS_THAN -> result < 0;
-            case GREATER_THAN -> result > 0;
-        };
-    }
-
-    /**
-     * Compares a column value against a constant of the same column type, using the
-     * natural ordering the storage engine writes its min/max summaries with.
-     *
-     * @param value    the column value taken from the row
-     * @param constant the predicate constant
-     * @return negative, zero or positive as value is less than, equal to or greater
-     *         than constant
-     */
-    @SuppressWarnings({ "unchecked", "rawtypes" })
-    private static int compare(Object value, Object constant) {
-        return ((Comparable) value).compareTo(constant);
     }
 
     /**
