@@ -145,4 +145,22 @@ public final class ScanOperator implements Operator {
             throw new IllegalStateException("scan operator has not been opened");
         }
     }
+
+    /**
+     * Returns the partition numbers assigned to this scan operator.
+     *
+     * @return unmodifiable list of partition numbers
+     */
+    public List<Integer> partitionNumbers() {
+        return partitionNumbers;
+    }
+
+    /**
+     * Returns the name of the table being scanned.
+     *
+     * @return table name
+     */
+    public String tableName() {
+        return tableName;
+    }
 }
