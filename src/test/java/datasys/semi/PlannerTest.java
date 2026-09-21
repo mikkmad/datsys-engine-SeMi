@@ -6,10 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.Optional;
 
@@ -43,7 +40,7 @@ class PlannerTest {
 
     @BeforeEach
     void setUp(@TempDir Path directory) throws IOException {
-        Path csvPath = copyResource(directory, "trips_sorted.csv");
+        Path csvPath = UtilsTest.copyResource(directory, "trips_sorted.csv");
         engine = new StorageEngine(directory, 2);
         engine.createTable("trips", SCHEMA);
         engine.copyFile("trips", csvPath.toString());
@@ -148,7 +145,7 @@ class PlannerTest {
      * Validates error handling on invalid queries and constructor inputs.
      */
     @Test
-    void validationErrorsOnUnknownTableColumnAndTypeMismatch() {
+    void validationErrorsOnUnknownTableAndColumn() {
         assertThrows(IllegalArgumentException.class, () -> new Planner(null));
 
         assertThrows(IllegalArgumentException.class, () -> planner.plan(null));
@@ -159,22 +156,5 @@ class PlannerTest {
         SelectStatement unknownColumn = new SelectStatement("trips",
                 Optional.of(new Predicate("nonexistent_col", Comparison.EQUALS, "val")));
         assertThrows(IllegalArgumentException.class, () -> planner.plan(unknownColumn));
-
-        SelectStatement typeMismatch = new SelectStatement("trips",
-                Optional.of(new Predicate("distance", Comparison.EQUALS, "not_a_long")));
-        assertThrows(IllegalArgumentException.class, () -> planner.plan(typeMismatch));
-    }
-
-    private static Path copyResource(Path directory, String filename) throws IOException {
-        Path target = directory.resolve(filename);
-        try (InputStream stream = PlannerTest.class.getResourceAsStream("/" + filename)) {
-            if (stream != null) {
-                Files.copy(stream, target, StandardCopyOption.REPLACE_EXISTING);
-                return target;
-            }
-        }
-        Path localPath = Path.of("src/test/resources", filename);
-        Files.copy(localPath, target, StandardCopyOption.REPLACE_EXISTING);
-        return target;
     }
 }

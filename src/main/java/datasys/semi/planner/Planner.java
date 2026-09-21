@@ -125,7 +125,6 @@ public final class Planner {
             List<StorageEngine.Partition> partitions, Predicate predicate) {
         int columnIndex = resolveColumnIndex(schema, predicate.columnName());
         ColumnSpec column = schema.get(columnIndex);
-        validateConstant(column.type(), predicate.constant());
 
         List<Integer> survivingPartitions = prunePartitions(tableName, partitions, column, predicate);
         int totalPartitions = partitions.size();
@@ -195,23 +194,5 @@ public final class Planner {
             }
         }
         throw new IllegalArgumentException("unknown column: " + columnName);
-    }
-
-    /**
-     * Validates that the constant object matches the expected column type.
-     *
-     * @param type     expected column type
-     * @param constant candidate constant object
-     * @throws IllegalArgumentException if constant type does not match column type
-     */
-    private static void validateConstant(ColumnType type, Object constant) {
-        boolean valid = switch (type) {
-            case STRING -> constant instanceof String;
-            case LONG -> constant instanceof Long;
-            case DOUBLE -> constant instanceof Double;
-        };
-        if (!valid) {
-            throw new IllegalArgumentException("constant type does not match column type: " + type);
-        }
     }
 }

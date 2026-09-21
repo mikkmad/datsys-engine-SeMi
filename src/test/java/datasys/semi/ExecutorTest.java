@@ -7,12 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -32,7 +29,7 @@ class ExecutorTest {
     @BeforeEach
     void setUp(@TempDir Path directory) throws IOException {
         engine = new StorageEngine(directory, 2);
-        csvFile = copyResource(directory, "trips.csv");
+        csvFile = UtilsTest.copyResource(directory, "trips.csv");
     }
 
     /**
@@ -136,18 +133,5 @@ class ExecutorTest {
         assertThrows(IllegalArgumentException.class, () -> executor.executeQuery(null));
         assertThrows(IllegalArgumentException.class,
                 () -> executor.executeQuery("CREATE TABLE t (x STRING); SELECT * FROM t;"));
-    }
-
-    private static Path copyResource(Path directory, String filename) throws IOException {
-        Path target = directory.resolve(filename);
-        try (InputStream stream = ExecutorTest.class.getResourceAsStream("/" + filename)) {
-            if (stream != null) {
-                Files.copy(stream, target, StandardCopyOption.REPLACE_EXISTING);
-                return target;
-            }
-        }
-        Path localPath = Path.of("src/test/resources", filename);
-        Files.copy(localPath, target, StandardCopyOption.REPLACE_EXISTING);
-        return target;
     }
 }

@@ -5,10 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -73,7 +70,7 @@ class ScanOperatorTest {
      * @throws IOException if the golden CSV cannot be copied into the directory
      */
     private static StorageEngine loadGoldenTable(Path directory) throws IOException {
-        Path csv = copyResource(directory, "trips_sorted.csv");
+        Path csv = UtilsTest.copyResource(directory, "trips_sorted.csv");
         StorageEngine engine = new StorageEngine(directory, 2);
         engine.createTable("trips", SCHEMA);
         engine.copyFile("trips", csv.toString());
@@ -97,25 +94,5 @@ class ScanOperatorTest {
         operator.close();
 
         return rows;
-    }
-
-    /**
-     * Copies a test resource into the temporary storage directory.
-     *
-     * @param directory the destination directory
-     * @param filename  the resource file name on the test classpath
-     * @return the path of the copied file
-     * @throws IOException if the resource cannot be read or written
-     */
-    private static Path copyResource(Path directory, String filename) throws IOException {
-        Path target = directory.resolve(filename);
-        try (InputStream stream = ScanOperatorTest.class.getResourceAsStream("/" + filename)) {
-            if (stream != null) {
-                Files.copy(stream, target, StandardCopyOption.REPLACE_EXISTING);
-                return target;
-            }
-        }
-        Files.copy(Path.of("src/test/resources", filename), target, StandardCopyOption.REPLACE_EXISTING);
-        return target;
     }
 }
