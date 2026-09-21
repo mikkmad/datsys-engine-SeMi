@@ -114,4 +114,22 @@ public final class FilterOperator implements Operator {
             throw new IllegalStateException("filter operator has not been opened");
         }
     }
+
+    /**
+     * Returns the child operator feeding rows into this filter.
+     *
+     * @return the child operator
+     */
+    public Operator child() {
+        return child;
+    }
+
+    /**
+     * Returns the bound predicate applied by this filter.
+     *
+     * @return the bound predicate
+     */
+    public BoundPredicate predicate() {
+        return predicate;
+    }
 }

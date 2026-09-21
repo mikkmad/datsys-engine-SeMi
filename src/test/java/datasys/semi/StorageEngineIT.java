@@ -4,13 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static datasys.semi.UtilsTest.copyResource;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -262,18 +261,5 @@ class StorageEngineIT {
         for (int i = 0; i < rowsA.size(); i++) {
             assertArrayEquals(rowsA.get(i), rowsB.get(i));
         }
-    }
-
-    private static Path copyResource(Path directory, String filename) throws IOException {
-        Path target = directory.resolve(filename);
-        try (InputStream stream = StorageEngineIT.class.getResourceAsStream("/" + filename)) {
-            if (stream != null) {
-                Files.copy(stream, target, StandardCopyOption.REPLACE_EXISTING);
-                return target;
-            }
-        }
-        Path localPath = Path.of("src/test/resources", filename);
-        Files.copy(localPath, target, StandardCopyOption.REPLACE_EXISTING);
-        return target;
     }
 }
