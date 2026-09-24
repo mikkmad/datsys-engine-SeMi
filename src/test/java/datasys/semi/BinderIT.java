@@ -43,19 +43,19 @@ class BinderIT {
                 assertDoesNotThrow(() -> binder.bind(copy));
 
                 // SELECT without WHERE on existing table binds
-                SelectStatement selectNoWhere = new SelectStatement("trips", Optional.empty());
+                SelectStatement selectNoWhere = new SelectStatement("trips", Optional.empty(), Optional.empty());
                 assertDoesNotThrow(() -> binder.bind(selectNoWhere));
 
                 // SELECT with valid WHERE conditions across all types binds
-                SelectStatement selectCity = new SelectStatement("trips", Optional.of(
+                SelectStatement selectCity = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("city", Comparison.EQUALS, "Copenhagen")));
                 assertDoesNotThrow(() -> binder.bind(selectCity));
 
-                SelectStatement selectDistance = new SelectStatement("trips", Optional.of(
+                SelectStatement selectDistance = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("distance", Comparison.GREATER_THAN, 100L)));
                 assertDoesNotThrow(() -> binder.bind(selectDistance));
 
-                SelectStatement selectPrice = new SelectStatement("trips", Optional.of(
+                SelectStatement selectPrice = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("price", Comparison.LESS_THAN, 50.0)));
                 assertDoesNotThrow(() -> binder.bind(selectPrice));
         }
@@ -65,7 +65,7 @@ class BinderIT {
                 StorageEngine engine = new StorageEngine(tempDir);
                 Binder binder = new Binder(engine);
 
-                SelectStatement selectUnknownTable = new SelectStatement("non_existent", Optional.empty());
+                SelectStatement selectUnknownTable = new SelectStatement("non_existent", Optional.empty(), Optional.empty());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(selectUnknownTable));
 
                 CopyStatement copyUnknownTable = new CopyStatement("non_existent", "data.csv");
@@ -78,7 +78,7 @@ class BinderIT {
                 engine.createTable("trips", TRIPS_SCHEMA);
                 Binder binder = new Binder(engine);
 
-                SelectStatement selectUnknownColumn = new SelectStatement("trips", Optional.of(
+                SelectStatement selectUnknownColumn = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("non_existent_column", Comparison.EQUALS, "test")));
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(selectUnknownColumn));
         }
@@ -90,22 +90,22 @@ class BinderIT {
                 Binder binder = new Binder(engine);
 
                 // Long column with String constant
-                SelectStatement distMismatch = new SelectStatement("trips", Optional.of(
+                SelectStatement distMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("distance", Comparison.EQUALS, "x")));
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(distMismatch));
 
                 // String column with Long constant
-                SelectStatement cityMismatch = new SelectStatement("trips", Optional.of(
+                SelectStatement cityMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("city", Comparison.EQUALS, 100L)));
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(cityMismatch));
 
                 // Double column with String constant
-                SelectStatement priceMismatch = new SelectStatement("trips", Optional.of(
+                SelectStatement priceMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("price", Comparison.EQUALS, "50.0")));
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(priceMismatch));
 
                 // Long column with Double constant
-                SelectStatement distDoubleMismatch = new SelectStatement("trips", Optional.of(
+                SelectStatement distDoubleMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("distance", Comparison.EQUALS, 100.5)));
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(distDoubleMismatch));
         }

@@ -45,54 +45,54 @@ class SqlPrinterTest {
 
         @Test
         void roundTripSelectStatementsWithoutWhere() {
-                SelectStatement selectAll = new SelectStatement("trips", Optional.empty());
+                SelectStatement selectAll = new SelectStatement("trips", Optional.empty(), Optional.empty());
                 assertRoundTrip(selectAll);
         }
 
         @Test
         void roundTripSelectStatementsWithWhereComparisonsAndTypes() {
                 // String EQUALS
-                SelectStatement strEquals = new SelectStatement("trips", Optional.of(
+                SelectStatement strEquals = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("city", Comparison.EQUALS, "Copenhagen")));
                 assertRoundTrip(strEquals);
 
                 // String LESS_THAN
-                SelectStatement strLess = new SelectStatement("trips", Optional.of(
+                SelectStatement strLess = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("city", Comparison.LESS_THAN, "Odense")));
                 assertRoundTrip(strLess);
 
                 // String GREATER_THAN
-                SelectStatement strGreater = new SelectStatement("trips", Optional.of(
+                SelectStatement strGreater = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("city", Comparison.GREATER_THAN, "Aalborg")));
                 assertRoundTrip(strGreater);
 
                 // Long EQUALS (positive)
-                SelectStatement longEquals = new SelectStatement("trips", Optional.of(
+                SelectStatement longEquals = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("distance", Comparison.EQUALS, 100L)));
                 assertRoundTrip(longEquals);
 
                 // Long LESS_THAN (negative)
-                SelectStatement longNeg = new SelectStatement("trips", Optional.of(
+                SelectStatement longNeg = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("distance", Comparison.LESS_THAN, -50L)));
                 assertRoundTrip(longNeg);
 
                 // Long GREATER_THAN (zero)
-                SelectStatement longZero = new SelectStatement("trips", Optional.of(
+                SelectStatement longZero = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("distance", Comparison.GREATER_THAN, 0L)));
                 assertRoundTrip(longZero);
 
                 // Double EQUALS (positive)
-                SelectStatement doubleEquals = new SelectStatement("trips", Optional.of(
+                SelectStatement doubleEquals = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("price", Comparison.EQUALS, 99.99)));
                 assertRoundTrip(doubleEquals);
 
                 // Double LESS_THAN (negative)
-                SelectStatement doubleNeg = new SelectStatement("trips", Optional.of(
+                SelectStatement doubleNeg = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("price", Comparison.LESS_THAN, -12.5)));
                 assertRoundTrip(doubleNeg);
 
                 // Double GREATER_THAN (whole-value double)
-                SelectStatement doubleWhole = new SelectStatement("trips", Optional.of(
+                SelectStatement doubleWhole = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("price", Comparison.GREATER_THAN, 300.0)));
                 assertRoundTrip(doubleWhole);
         }

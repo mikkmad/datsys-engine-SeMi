@@ -54,8 +54,7 @@ class PlannerTest {
      */
     @Test
     void plannerPruningKeepsMatchingPartitionsOnSortedGoldenData() {
-        SelectStatement statement = new SelectStatement("trips",
-                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)));
+        SelectStatement statement = new SelectStatement("trips", Optional.empty(), Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)));
 
         Operator plan = planner.plan(statement);
         ScanStats stats = planner.lastScanStats();
@@ -79,8 +78,7 @@ class PlannerTest {
     void plannerPruningOnLowerBoundAndFullyPrunedQueries() {
         // Partition 0: distance 12..31. distance < 50 keeps partition 0 and drops 1, 2,
         // 3.
-        SelectStatement lowerBound = new SelectStatement("trips",
-                Optional.of(new Predicate("distance", Comparison.LESS_THAN, 50L)));
+        SelectStatement lowerBound = new SelectStatement("trips", Optional.empty(), Optional.of(new Predicate("distance", Comparison.LESS_THAN, 50L)));
         planner.plan(lowerBound);
 
         ScanStats lowerStats = planner.lastScanStats();
@@ -89,8 +87,7 @@ class PlannerTest {
         assertEquals(3, lowerStats.partitionsPruned());
 
         // Fully pruned query: distance > 500 matches none of the partitions.
-        SelectStatement none = new SelectStatement("trips",
-                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 500L)));
+        SelectStatement none = new SelectStatement("trips", Optional.empty(), Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 500L)));
         Operator planNone = planner.plan(none);
 
         ScanStats noneStats = planner.lastScanStats();
@@ -110,8 +107,7 @@ class PlannerTest {
     @Test
     void plannerShapesDifferentiateWhereAndNoWhereQueries() {
         // 1. WHERE -> Filter over Scan
-        SelectStatement withWhere = new SelectStatement("trips",
-                Optional.of(new Predicate("city", Comparison.EQUALS, "Odense")));
+        SelectStatement withWhere = new SelectStatement("trips", Optional.empty(), Optional.of(new Predicate("city", Comparison.EQUALS, "Odense")));
 
         Operator filteredPlan = planner.plan(withWhere);
         assertInstanceOf(FilterOperator.class, filteredPlan);
@@ -126,7 +122,7 @@ class PlannerTest {
         assertEquals("Odense", filter.predicate().constant());
 
         // 2. No WHERE -> bare Scan over all partitions
-        SelectStatement withoutWhere = new SelectStatement("trips", Optional.empty());
+        SelectStatement withoutWhere = new SelectStatement("trips", Optional.empty(), Optional.empty());
 
         Operator barePlan = planner.plan(withoutWhere);
         assertInstanceOf(ScanOperator.class, barePlan);
@@ -150,11 +146,10 @@ class PlannerTest {
 
         assertThrows(IllegalArgumentException.class, () -> planner.plan(null));
 
-        SelectStatement unknownTable = new SelectStatement("nonexistent", Optional.empty());
+        SelectStatement unknownTable = new SelectStatement("nonexistent", Optional.empty(), Optional.empty());
         assertThrows(IllegalArgumentException.class, () -> planner.plan(unknownTable));
 
-        SelectStatement unknownColumn = new SelectStatement("trips",
-                Optional.of(new Predicate("nonexistent_col", Comparison.EQUALS, "val")));
+        SelectStatement unknownColumn = new SelectStatement("trips", Optional.empty(), Optional.of(new Predicate("nonexistent_col", Comparison.EQUALS, "val")));
         assertThrows(IllegalArgumentException.class, () -> planner.plan(unknownColumn));
     }
 }

@@ -187,6 +187,7 @@ public final class StorageEngine {
 
         long started = System.nanoTime();
         SelectStatement statement = new SelectStatement(tableName,
+                Optional.empty(),
                 Optional.of(new Predicate(columnName, comparison, constant)));
 
         List<Object[]> result = select(statement);
