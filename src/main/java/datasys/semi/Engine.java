@@ -118,7 +118,7 @@ public final class Engine {
      * @param out output stream receiving usage instructions
      */
     private static void printUsage(PrintStream out) {
-        out.println(TEAM_NAME);
+        out.println(teamName());
         out.println("Usage:");
         out.println("  java -jar engine.jar                  - Print team name and usage");
         out.println("  java -jar engine.jar \"<sql>\"          - Execute a single SQL statement");
@@ -130,7 +130,7 @@ public final class Engine {
      *
      * @return team name string
      */
-    public String teamName() {
+    public static String teamName() {
         return TEAM_NAME;
     }
 }
