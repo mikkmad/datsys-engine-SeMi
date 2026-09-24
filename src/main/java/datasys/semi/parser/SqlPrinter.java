@@ -64,12 +64,17 @@ public final class SqlPrinter {
      * @return SQL text string
      */
     private String printSelect(SelectStatement statement) {
+        String columnsPart = "*";
+        if (statement.columns().isPresent() && !statement.columns().get().isEmpty()) {
+            columnsPart = String.join(", ", statement.columns().get());
+        }
+
         if (statement.where().isEmpty()) {
-            return "SELECT * FROM " + statement.tableName() + ";";
+            return "SELECT " + columnsPart + " FROM " + statement.tableName() + ";";
         }
 
         Predicate predicate = statement.where().get();
-        return "SELECT * FROM " + statement.tableName() + " WHERE " + printPredicate(predicate) + ";";
+        return "SELECT " + columnsPart + " FROM " + statement.tableName() + " WHERE " + printPredicate(predicate) + ";";
     }
 
     /**

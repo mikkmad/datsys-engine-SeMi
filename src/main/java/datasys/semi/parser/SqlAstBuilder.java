@@ -127,10 +127,18 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
     @Override
     public SelectStatement visitSelect(SqlParser.SelectContext context) {
         String tableName = context.IDENTIFIER().getText();
+
+        Optional<List<String>> columns = Optional.empty();
+        if (context.columnList() != null) {
+            columns = Optional.of(context.columnList().IDENTIFIER().stream()
+                    .map(node -> node.getText())
+                    .toList());
+        }
+
         Optional<Predicate> where = context.predicate() != null
                 ? Optional.of((Predicate) visit(context.predicate()))
                 : Optional.empty();
-        return new SelectStatement(tableName, where);
+        return new SelectStatement(tableName, columns, where);
     }
 
     /**
