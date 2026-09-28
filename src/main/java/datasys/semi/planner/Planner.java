@@ -13,6 +13,7 @@ import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.operators.FilterOperator;
 import datasys.semi.operators.Operator;
+import datasys.semi.operators.ProjectOperator;
 import datasys.semi.operators.ScanOperator;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
@@ -69,11 +70,23 @@ public final class Planner {
         List<ColumnSpec> schema = engine.schema(tableName);
         List<StorageEngine.Partition> partitions = engine.partitions(tableName);
 
+        Operator root;
         if (statement.where().isEmpty()) {
-            return planWithoutPredicate(tableName, partitions);
+            root = planWithoutPredicate(tableName, partitions);
+        } else {
+            root = planWithPredicate(tableName, schema, partitions, statement.where().get());
         }
 
-        return planWithPredicate(tableName, schema, partitions, statement.where().get());
+        if (statement.columns().isPresent()) {
+            List<String> projectedColumnNames = statement.columns().get();
+            int[] columnIndices = new int[projectedColumnNames.size()];
+            for (int i = 0; i < projectedColumnNames.size(); i++) {
+                columnIndices[i] = resolveColumnIndex(schema, projectedColumnNames.get(i));
+            }
+            root = new ProjectOperator(root, columnIndices);
+        }
+
+        return root;
     }
 
     /**
