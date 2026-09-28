@@ -19,7 +19,7 @@ class EngineTest {
 
     @Test
     void teamName() {
-        assertEquals("Team SeMi", new Engine().teamName());
+        assertEquals("Team SeMi", Engine.teamName());
     }
 
     @Test
