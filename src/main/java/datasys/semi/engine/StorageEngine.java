@@ -18,6 +18,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -27,7 +28,12 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import datasys.semi.models.Predicate;
 import datasys.semi.models.ScanStats;
+import datasys.semi.models.SelectStatement;
+import datasys.semi.operators.Operator;
+import datasys.semi.parser.Binder;
+import datasys.semi.planner.Planner;
 
 public final class StorageEngine {
 
@@ -163,64 +169,99 @@ public final class StorageEngine {
         }
     }
 
+    /**
+     * Executes a SELECT query with a single binary predicate by planning and
+     * draining an operator pipeline.
+     *
+     * @param tableName  name of the table to query
+     * @param columnName column to evaluate the predicate against
+     * @param comparison comparison operator
+     * @param constant   typed literal value to compare with
+     * @return matching rows in schema column order
+     * @throws IllegalArgumentException if table or column is unknown, or constant
+     *                                  type mismatches
+     */
     public List<Object[]> select(String tableName, String columnName, Comparison comparison, Object constant) {
-        LOGGER.debug("api=select table=%s column=%s comparison=%s const=%s".formatted(tableName, columnName, comparison,
-                constant));
-        Catalog catalog = requireCatalog(tableName);
-
-        int predicateColumn = columnIndex(catalog.schema, columnName);
-        Column column = catalog.schema.get(predicateColumn);
-        validateConstant(column.type, constant);
+        LOGGER.debug("api=select table={} column={} comparison={} const={}",
+                tableName, columnName, comparison, constant);
 
         long started = System.nanoTime();
-        int read = 0;
-        int pruned = 0;
+        SelectStatement statement = new SelectStatement(tableName,
+                Optional.empty(),
+                Optional.of(new Predicate(columnName, comparison, constant)));
 
-        List<Object[]> result = new ArrayList<>();
-        ColumnType type = ColumnType.valueOf(column.type);
-
-        for (int partitionNumber = 0; partitionNumber < catalog.partitions.size(); partitionNumber++) {
-            Partition partition = catalog.partitions.get(partitionNumber);
-            Statistics statistics = partition.statistics.get(columnName);
-
-            Object min = parseStatistic(statistics.min, type);
-            Object max = parseStatistic(statistics.max, type);
-
-            boolean shouldPrune = shouldPrune(type, comparison, constant, min, max);
-            LOGGER.debug("table=%s column=%s comparison=%s const=%s partition=%d min=%s max=%s decision=%s".formatted(
-                    tableName, columnName, comparison, constant, partitionNumber, statistics.min, statistics.max,
-                    shouldPrune ? "PRUNED" : "READ"));
-
-            if (shouldPrune) {
-                pruned++;
-                continue;
-            }
-
-            read++;
-            try {
-                result.addAll(readMatchingRows(
-                        dataDirectory.resolve(partition.path),
-                        catalog.schema,
-                        predicateColumn,
-                        comparison,
-                        constant));
-            } catch (IOException exception) {
-                throw new IllegalStateException("Could not read partition " + partition.path, exception);
-            }
-        }
-
-        lastScanStats = new ScanStats(catalog.partitions.size(), read, pruned);
+        List<Object[]> result = select(statement);
 
         LOGGER.debug(
-                "table=%s column=%s comparison=%s const=%s partitionsRead=%d partitionsPruned=%d rowsOut=%d durationMs=%d"
-                        .formatted(tableName, columnName, comparison, constant, read, pruned, result.size(),
-                                elapsedMillis(started)));
+                "table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
+                tableName, columnName, comparison, constant, lastScanStats.partitionsRead(),
+                lastScanStats.partitionsPruned(), result.size(), elapsedMillis(started));
 
         return result;
     }
 
+    /**
+     * Executes a SELECT statement by planning and draining an operator pipeline.
+     *
+     * @param statement the select statement to execute
+     * @return matching rows in schema column order
+     * @throws IllegalArgumentException if statement is null or table/column is
+     *                                  unknown
+     */
+    public List<Object[]> select(SelectStatement statement) {
+        if (statement == null) {
+            throw new IllegalArgumentException("statement must not be null");
+        }
+
+        Binder binder = new Binder(this);
+        binder.bind(statement);
+
+        Planner planner = new Planner(this);
+        Operator plan = planner.plan(statement);
+        this.lastScanStats = planner.lastScanStats();
+
+        return drainPipeline(plan);
+    }
+
+    /**
+     * Drains an operator pipeline to completion and returns all emitted rows.
+     *
+     * @param operator pipeline root operator
+     * @return collected rows in iteration order
+     */
+    private static List<Object[]> drainPipeline(Operator operator) {
+        operator.open();
+        try {
+            List<Object[]> rows = new ArrayList<>();
+            Object[] row;
+            while ((row = operator.next()) != null) {
+                rows.add(row);
+            }
+            return rows;
+        } finally {
+            operator.close();
+        }
+    }
+
+    /**
+     * Returns the scan statistics calculated during the most recent select query.
+     *
+     * @return the last scan statistics
+     */
     public ScanStats getLastScanStats() {
         return lastScanStats;
+    }
+
+    /**
+     * Returns the list of partitions for a table in catalog order.
+     *
+     * @param tableName the name of the table to look up
+     * @return unmodifiable list of partitions
+     * @throws IllegalArgumentException if the table is unknown or tableName is null
+     */
+    public List<Partition> partitions(String tableName) {
+        Catalog catalog = requireCatalog(tableName);
+        return List.copyOf(catalog.partitions);
     }
 
     /**
@@ -235,6 +276,49 @@ public final class StorageEngine {
         return catalog.schema.stream()
                 .map(column -> new ColumnSpec(column.name, ColumnType.valueOf(column.type)))
                 .toList();
+    }
+
+    /**
+     * Reads every row of one partition. No predicate is involved: this is the plain
+     * read the scan operator performs once the planner has chosen the partition.
+     *
+     * @param tableName the table owning the partition
+     * @param partition the partition to read, as taken from {@link #partitions}
+     * @return all rows of the partition, in file order and schema column order
+     * @throws IllegalArgumentException if the table is unknown or partition is null
+     * @throws IllegalStateException    if the partition file cannot be read
+     */
+    public List<Object[]> readPartition(String tableName, Partition partition) {
+        Catalog catalog = requireCatalog(tableName);
+        if (partition == null) {
+            throw new IllegalArgumentException("partition must not be null");
+        }
+
+        try {
+            return readRows(dataDirectory.resolve(partition.path), catalog.schema);
+        } catch (IOException exception) {
+            LOGGER.error("api=readPartition table={} partition={} failed", tableName, partition.path, exception);
+            throw new IllegalStateException("Could not read partition " + partition.path, exception);
+        }
+    }
+
+    /**
+     * Reads every row of a catalog partition selected by its zero-based number.
+     *
+     * @param tableName       the table owning the partition
+     * @param partitionNumber zero-based partition number in catalog order
+     * @return all rows of the partition, in file order and schema column order
+     * @throws IllegalArgumentException if the table is unknown or the partition
+     *                                  number is outside the catalog range
+     * @throws IllegalStateException    if the partition file cannot be read
+     */
+    public List<Object[]> readPartition(String tableName, int partitionNumber) {
+        Catalog catalog = requireCatalog(tableName);
+        if (partitionNumber < 0 || partitionNumber >= catalog.partitions.size()) {
+            throw new IllegalArgumentException("partition number out of range: " + partitionNumber);
+        }
+
+        return readPartition(tableName, catalog.partitions.get(partitionNumber));
     }
 
     // --- Package-Private Methods (Visible for Unit Testing) ---
@@ -257,6 +341,17 @@ public final class StorageEngine {
         return values;
     }
 
+    /**
+     * Determines whether a partition should be pruned based on column min/max
+     * summaries.
+     *
+     * @param type       column type
+     * @param comparison comparison operator
+     * @param constant   filter literal constant
+     * @param min        partition minimum value
+     * @param max        partition maximum value
+     * @return true if the partition can be safely pruned, false otherwise
+     */
     public boolean shouldPrune(ColumnType type, Comparison comparison, Object constant, Object min, Object max) {
         int lower = compare(constant, min);
         int upper = compare(constant, max);
@@ -341,8 +436,16 @@ public final class StorageEngine {
         }
     }
 
-    private List<Object[]> readMatchingRows(Path path, List<Column> schema, int predicateColumn,
-            Comparison comparison, Object constant) throws IOException {
+    /**
+     * Decodes every row of a partition file. This is the single place the binary
+     * partition format is read; callers that need a subset filter afterwards.
+     *
+     * @param path   the partition data file to read
+     * @param schema the table schema, in column order
+     * @return all rows of the partition, in file order
+     * @throws IOException if the file cannot be read or its header is invalid
+     */
+    private List<Object[]> readRows(Path path, List<Column> schema) throws IOException {
         List<Object[]> rows = new ArrayList<>();
 
         try (DataInputStream input = new DataInputStream(Files.newInputStream(path))) {
@@ -362,10 +465,7 @@ public final class StorageEngine {
                 for (int column = 0; column < schema.size(); column++) {
                     row[column] = readValue(input, ColumnType.valueOf(schema.get(column).type));
                 }
-
-                if (matches(row[predicateColumn], comparison, constant)) {
-                    rows.add(row);
-                }
+                rows.add(row);
             }
         }
 
@@ -410,7 +510,15 @@ public final class StorageEngine {
         };
     }
 
-    private static Object parseStatistic(Object value, ColumnType type) {
+    /**
+     * Parses a string or raw statistic value into the appropriate Java type for the
+     * column.
+     *
+     * @param value raw statistic value
+     * @param type  column type
+     * @return parsed typed object
+     */
+    public static Object parseStatistic(Object value, ColumnType type) {
         if (type == ColumnType.STRING) {
             return String.valueOf(value);
         }
@@ -454,15 +562,6 @@ public final class StorageEngine {
 
     // --- Predicate Evaluation & Comparisons ---
 
-    private static boolean matches(Object value, Comparison comparison, Object constant) {
-        int result = compare(value, constant);
-        return switch (comparison) {
-            case EQUALS -> result == 0;
-            case LESS_THAN -> result < 0;
-            case GREATER_THAN -> result > 0;
-        };
-    }
-
     @SuppressWarnings({ "unchecked", "rawtypes" })
     private static int compare(Object left, Object right) {
         return ((Comparable) left).compareTo(right);
@@ -484,26 +583,6 @@ public final class StorageEngine {
             throw new IllegalArgumentException("unknown table: " + tableName);
         }
         return catalog;
-    }
-
-    private static int columnIndex(List<Column> schema, String columnName) {
-        for (int index = 0; index < schema.size(); index++) {
-            if (schema.get(index).name.equals(columnName)) {
-                return index;
-            }
-        }
-        throw new IllegalArgumentException("unknown column: " + columnName);
-    }
-
-    private static void validateConstant(String typeName, Object constant) {
-        boolean valid = switch (ColumnType.valueOf(typeName)) {
-            case STRING -> constant instanceof String;
-            case LONG -> constant instanceof Long;
-            case DOUBLE -> constant instanceof Double;
-        };
-        if (!valid) {
-            throw new IllegalArgumentException("constant type does not match column type");
-        }
     }
 
     private static void requireTableName(String tableName) {

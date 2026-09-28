@@ -2,3 +2,7 @@ target/
 logs/
 .vscode/
 semi-demo/
+data/
+
+ours.csv
+theirs.csv

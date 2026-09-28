@@ -48,14 +48,13 @@ class SqlParserTest {
                 List<Statement> selectWithWhereResults = parser.parse("SELECT * FROM trips WHERE distance > 100;");
                 assertEquals(1, selectWithWhereResults.size());
                 SelectStatement expectedSelectWithWhere = new SelectStatement(
-                                "trips",
-                                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)));
+                                "trips", Optional.empty(), Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)));
                 assertEquals(expectedSelectWithWhere, selectWithWhereResults.getFirst());
 
                 // 1.4 SELECT without WHERE
                 List<Statement> selectNoWhereResults = parser.parse("SELECT * FROM trips;");
                 assertEquals(1, selectNoWhereResults.size());
-                SelectStatement expectedSelectNoWhere = new SelectStatement("trips", Optional.empty());
+                SelectStatement expectedSelectNoWhere = new SelectStatement("trips", Optional.empty(), Optional.empty());
                 assertEquals(expectedSelectNoWhere, selectNoWhereResults.getFirst());
 
                 // 1.5 Multi-statement script
