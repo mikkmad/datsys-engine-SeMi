@@ -1,6 +1,8 @@
 package datasys.semi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Optional;
@@ -17,6 +19,9 @@ import datasys.semi.schema.*;
  * statement shapes and literal types.
  */
 class SqlPrinterTest {
+
+        /** Grammar shape of DOUBLE_LITERAL: no exponent, digits on both sides of the point. */
+        private static final String PLAIN_DECIMAL_PATTERN = "-?[0-9]+\\.[0-9]+";
 
         private final SqlParser parser = new SqlParser();
         private final SqlPrinter printer = new SqlPrinter();
@@ -41,6 +46,13 @@ class SqlPrinterTest {
 
                 CopyStatement nestedPathCopy = new CopyStatement("trips", "data/sub/trips.csv");
                 assertRoundTrip(nestedPathCopy);
+        }
+
+        @Test
+        void roundTripCopyStatementWithEmptyPath() {
+                CopyStatement emptyPathCopy = new CopyStatement("trips", "");
+                assertEquals("COPY trips FROM '';", printer.print(emptyPathCopy));
+                assertRoundTrip(emptyPathCopy);
         }
 
         @Test
@@ -95,6 +107,83 @@ class SqlPrinterTest {
                 SelectStatement doubleWhole = new SelectStatement("trips", Optional.empty(), Optional.of(
                                 new Predicate("price", Comparison.GREATER_THAN, 300.0)));
                 assertRoundTrip(doubleWhole);
+        }
+
+        @Test
+        void extremeDoublesPrintAsPlainDecimalsAndRoundTripExactly() {
+                List<Double> boundaryValues = List.of(
+                                Double.MIN_VALUE, -Double.MIN_VALUE,
+                                Double.MIN_NORMAL, -Double.MIN_NORMAL,
+                                Double.MAX_VALUE, -Double.MAX_VALUE,
+                                Math.nextDown(Double.MIN_NORMAL),
+                                1.0E-3, Math.nextDown(1.0E-3), 1.0E-4, 1.0E-5,
+                                1.0E7, Math.nextDown(1.0E7), 1.0E8, 1.0E20,
+                                1.234567890123456789, 0.1, -12.5, 9007199254740993.0);
+
+                for (double value : boundaryValues) {
+                        String literal = printDoubleLiteral(value);
+                        assertTrue(literal.matches(PLAIN_DECIMAL_PATTERN),
+                                        () -> "not a plain decimal for " + value + ": " + literal);
+                        assertEquals(0, Double.compare(value, Double.parseDouble(literal)),
+                                        () -> "precision lost for " + value + ": " + literal);
+                        assertRoundTrip(selectWithPrice(value));
+                }
+        }
+
+        @Test
+        void doubleMinValuePrintsWithoutExponent() {
+                String literal = printDoubleLiteral(Double.MIN_VALUE);
+                assertTrue(literal.startsWith("0.000"));
+                assertTrue(literal.endsWith("49"));
+                assertEquals(-1, literal.indexOf('E'));
+        }
+
+        @Test
+        void doubleMaxValuePrintsWithTrailingFractionDigit() {
+                String literal = printDoubleLiteral(Double.MAX_VALUE);
+                assertTrue(literal.startsWith("17976931348623157"));
+                assertTrue(literal.endsWith(".0"));
+                assertEquals(309 + ".0".length(), literal.length());
+        }
+
+        @Test
+        void signedZeroIsPreservedThroughRoundTrip() {
+                assertEquals("-0.0", printDoubleLiteral(-0.0));
+                assertEquals("0.0", printDoubleLiteral(0.0));
+
+                Statement reparsedNegativeZero = parser.parse(printer.print(selectWithPrice(-0.0))).getFirst();
+                Object constant = ((SelectStatement) reparsedNegativeZero).where().orElseThrow().constant();
+                assertEquals(0, Double.compare(-0.0, (Double) constant));
+                assertRoundTrip(selectWithPrice(-0.0));
+                assertRoundTrip(selectWithPrice(0.0));
+        }
+
+        @Test
+        void longExtremesRoundTrip() {
+                for (long value : List.of(Long.MIN_VALUE, Long.MAX_VALUE, -1L, 0L)) {
+                        SelectStatement select = new SelectStatement("trips", Optional.empty(), Optional.of(
+                                        new Predicate("distance", Comparison.EQUALS, value)));
+                        assertRoundTrip(select);
+                }
+        }
+
+        @Test
+        void nonFiniteDoublesAreRejectedByPrinter() {
+                for (double value : List.of(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+                        assertThrows(IllegalArgumentException.class, () -> printer.print(selectWithPrice(value)));
+                }
+        }
+
+        private SelectStatement selectWithPrice(double price) {
+                return new SelectStatement("trips", Optional.empty(), Optional.of(
+                                new Predicate("price", Comparison.EQUALS, price)));
+        }
+
+        private String printDoubleLiteral(double value) {
+                String printedSql = printer.print(selectWithPrice(value));
+                String prefix = "SELECT * FROM trips WHERE price = ";
+                assertTrue(printedSql.startsWith(prefix) && printedSql.endsWith(";"), printedSql);
+                return printedSql.substring(prefix.length(), printedSql.length() - 1);
         }
 
         private void assertRoundTrip(Statement statement) {

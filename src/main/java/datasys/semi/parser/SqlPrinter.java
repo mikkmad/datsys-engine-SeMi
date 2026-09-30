@@ -1,5 +1,6 @@
 package datasys.semi.parser;
 
+import java.math.BigDecimal;
 import java.util.stream.Collectors;
 
 import datasys.semi.models.*;
@@ -97,13 +98,42 @@ public final class SqlPrinter {
     /**
      * Formats a constant literal value for SQL output.
      *
-     * @param constant constant value
-     * @return formatted literal string
+     * @param constant constant value: String, Long, or Double
+     * @return formatted literal string accepted by the grammar
+     * @throws IllegalArgumentException if the constant is of an unsupported type
+     *                                  or is a non-finite Double
      */
     private String formatLiteral(Object constant) {
-        if (constant instanceof String stringValue) {
-            return "'" + stringValue + "'";
+        return switch (constant) {
+            case String stringValue -> "'" + stringValue + "'";
+            case Long longValue -> Long.toString(longValue);
+            case Double doubleValue -> formatDouble(doubleValue);
+            default -> throw new IllegalArgumentException("unsupported constant type: " + constant);
+        };
+    }
+
+    /**
+     * Formats a Double as a plain decimal literal ({@code -?[0-9]+.[0-9]+}).
+     * {@link Double#toString(double)} switches to exponent notation outside
+     * [1e-3, 1e7), which the grammar cannot read; such values are expanded
+     * without an exponent. The shortest round-trip digits are kept, so the
+     * output reparses to the identical double, and the sign of zero survives.
+     *
+     * @param value finite double value
+     * @return plain decimal text with at least one digit on each side of the point
+     * @throws IllegalArgumentException if value is NaN or infinite
+     */
+    private String formatDouble(double value) {
+        if (!Double.isFinite(value)) {
+            throw new IllegalArgumentException("non-finite double has no SQL literal: " + value);
         }
-        return String.valueOf(constant);
+
+        String shortestText = Double.toString(value);
+        if (!shortestText.contains("E")) {
+            return shortestText;
+        }
+
+        String plainText = new BigDecimal(shortestText).toPlainString();
+        return plainText.contains(".") ? plainText : plainText + ".0";
     }
 }

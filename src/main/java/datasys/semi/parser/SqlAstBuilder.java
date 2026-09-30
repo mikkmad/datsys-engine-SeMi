@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import org.antlr.v4.runtime.Token;
+
 import datasys.semi.models.Statement;
 import datasys.semi.sql.SqlBaseVisitor;
 import datasys.semi.sql.SqlParser;
@@ -165,6 +167,8 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
      *
      * @param context the literal context
      * @return typed constant: String, Long, or Double
+     * @throws SqlParseException     if a numeric literal is outside the range of
+     *                               its Java type
      * @throws IllegalStateException if an unsupported literal token is encountered
      */
     @Override
@@ -174,11 +178,46 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
             return text.substring(1, text.length() - 1);
         }
         if (context.DOUBLE_LITERAL() != null) {
-            return Double.parseDouble(context.DOUBLE_LITERAL().getText());
+            return parseDoubleLiteral(context.DOUBLE_LITERAL().getSymbol());
         }
         if (context.LONG_LITERAL() != null) {
-            return Long.parseLong(context.LONG_LITERAL().getText());
+            return parseLongLiteral(context.LONG_LITERAL().getSymbol());
         }
         throw new IllegalStateException("unsupported literal context: " + context.getText());
+    }
+
+    /**
+     * Converts a LONG_LITERAL token to a Long.
+     *
+     * @param token the LONG_LITERAL token
+     * @return the parsed Long value
+     * @throws SqlParseException at the token's position if the value lies outside
+     *                           [Long.MIN_VALUE, Long.MAX_VALUE]
+     */
+    private static Long parseLongLiteral(Token token) {
+        try {
+            return Long.parseLong(token.getText());
+        } catch (NumberFormatException exception) {
+            throw new SqlParseException("LONG literal out of range: " + token.getText(),
+                    token.getLine(), token.getCharPositionInLine(), exception);
+        }
+    }
+
+    /**
+     * Converts a DOUBLE_LITERAL token to a Double, rounding to the nearest
+     * representable value.
+     *
+     * @param token the DOUBLE_LITERAL token
+     * @return the parsed, finite Double value
+     * @throws SqlParseException at the token's position if the magnitude exceeds
+     *                           Double.MAX_VALUE and would round to infinity
+     */
+    private static Double parseDoubleLiteral(Token token) {
+        double value = Double.parseDouble(token.getText());
+        if (Double.isInfinite(value)) {
+            throw new SqlParseException("DOUBLE literal out of range: " + token.getText(),
+                    token.getLine(), token.getCharPositionInLine());
+        }
+        return value;
     }
 }

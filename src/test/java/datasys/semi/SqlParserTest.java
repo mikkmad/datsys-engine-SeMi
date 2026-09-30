@@ -190,4 +190,69 @@ class SqlParserTest {
                 assertInstanceOf(CopyStatement.class, statements.get(1));
                 assertInstanceOf(SelectStatement.class, statements.get(2));
         }
+
+        @Test
+        void longOverflowThrowsSqlParseExceptionAtTokenPosition() {
+                SqlParseException tooLarge = assertThrows(SqlParseException.class,
+                                () -> parser.parse("SELECT * FROM trips\n  WHERE distance = 9223372036854775808;"));
+                assertEquals(2, tooLarge.line());
+                assertEquals(19, tooLarge.column());
+                assertInstanceOf(NumberFormatException.class, tooLarge.getCause());
+
+                SqlParseException tooSmall = assertThrows(SqlParseException.class,
+                                () -> parser.parse("SELECT * FROM trips WHERE distance < -9223372036854775809;"));
+                assertEquals(1, tooSmall.line());
+                assertEquals(37, tooSmall.column());
+        }
+
+        @Test
+        void doubleOverflowThrowsSqlParseExceptionAtTokenPosition() {
+                String hugeDigits = "1" + "0".repeat(309);
+                SqlParseException tooLarge = assertThrows(SqlParseException.class,
+                                () -> parser.parse("-- comment\nSELECT * FROM trips WHERE price > " + hugeDigits + ".0;"));
+                assertEquals(2, tooLarge.line());
+                assertEquals(34, tooLarge.column());
+
+                SqlParseException tooSmall = assertThrows(SqlParseException.class,
+                                () -> parser.parse("SELECT * FROM trips WHERE price < -" + hugeDigits + ".0;"));
+                assertEquals(1, tooSmall.line());
+                assertEquals(34, tooSmall.column());
+        }
+
+        @Test
+        void overflowInLaterStatementReportsItsOwnPosition() {
+                SqlParseException exception = assertThrows(SqlParseException.class,
+                                () -> parser.parse("SELECT * FROM trips;\nSELECT * FROM trips WHERE distance = 99999999999999999999;"));
+                assertEquals(2, exception.line());
+                assertEquals(37, exception.column());
+        }
+
+        @Test
+        void numericBoundaryLiteralsParseToExactValues() {
+                assertEquals(Long.MAX_VALUE, parseConstant("distance = 9223372036854775807"));
+                assertEquals(Long.MIN_VALUE, parseConstant("distance = -9223372036854775808"));
+                assertEquals(Double.MAX_VALUE,
+                                parseConstant("price = " + new java.math.BigDecimal(Double.MAX_VALUE).toPlainString() + ".0"));
+                assertEquals(Double.MIN_VALUE,
+                                parseConstant("price = " + new java.math.BigDecimal(Double.MIN_VALUE).toPlainString()));
+        }
+
+        @Test
+        void negativeZeroDoubleKeepsItsSign() {
+                assertEquals(-0.0, parseConstant("price = -0.0"));
+                assertEquals(-0.0, parseConstant("price = -000.000"));
+                assertEquals(0.0, parseConstant("price = 0.0"));
+        }
+
+        @Test
+        void emptyCopyPathParses() {
+                List<Statement> statements = parser.parse("COPY trips FROM '';");
+                assertEquals(List.of(new CopyStatement("trips", "")), statements);
+        }
+
+        private Object parseConstant(String predicateSql) {
+                SelectStatement select = (SelectStatement) parser
+                                .parse("SELECT * FROM trips WHERE " + predicateSql + ";").getFirst();
+                return select.where().orElseThrow().constant();
+        }
 }
