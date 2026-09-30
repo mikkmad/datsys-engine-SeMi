@@ -1,0 +1,2 @@
+# Keep exact bytes (CR, CRLF, U+000B) in the SQL test corpus
+src/test/resources/sql-corpus/*.txt -text
