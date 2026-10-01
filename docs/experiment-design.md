@@ -14,8 +14,11 @@ We will measure the execution of the statements in `ms`.
 
 ## Procedure
 Data generation...
+
 Values that vary: size of table / csv file, statement (copy or select)
+
 We do/do not include the first cold run ...
+
 We do 8 repetitions?
 
 **System Specification**:
