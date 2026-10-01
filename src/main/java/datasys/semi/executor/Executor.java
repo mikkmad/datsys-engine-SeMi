@@ -113,7 +113,7 @@ public final class Executor {
                 executeStatement(statement);
             }
         } catch (RuntimeException exception) {
-            LOGGER.error("Execution failed at statementNumber={}", statementNumber, exception);
+            LOGGER.error("Execution failed at statementNumber={}", statementNumber);
             throw exception;
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);

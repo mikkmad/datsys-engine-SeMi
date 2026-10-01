@@ -69,7 +69,7 @@ public final class Engine {
             Executor executor = new Executor(engine, out);
             dispatchArguments(args, executor);
         } catch (Exception exception) {
-            LOGGER.error("Engine execution failed: {}", exception.getMessage(), exception);
+            LOGGER.error("Engine execution failed: {}", exception.getMessage());
             err.println("Error: " + exception.getMessage());
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
@@ -88,8 +88,8 @@ public final class Engine {
      *                                  shapes
      */
     private static void dispatchArguments(String[] args, Executor executor) throws IOException {
-        if (args.length == 1) {
-            executor.execute(args[0]);
+        if (args.length == 2 && "-c".equals(args[0])) {
+            executor.execute(args[1]);
             return;
         }
 
@@ -100,7 +100,7 @@ public final class Engine {
             return;
         }
 
-        throw new IllegalArgumentException("invalid arguments; expected single SQL string or '-f <script.sql>'");
+        throw new IllegalArgumentException("invalid arguments; expected '-c \"<SQL string>\"' or '-f <script.sql>'");
     }
 
     /**
@@ -120,9 +120,9 @@ public final class Engine {
     private static void printUsage(PrintStream out) {
         out.println(teamName());
         out.println("Usage:");
-        out.println("  java -jar engine.jar                  - Print team name and usage");
-        out.println("  java -jar engine.jar \"<sql>\"          - Execute a single SQL statement");
-        out.println("  java -jar engine.jar -f <script.sql>  - Execute a SQL script file");
+        out.println("  java -jar engine.jar                   - Print team name and usage");
+        out.println("  java -jar engine.jar -c \"<SQL string>\" - Execute one or more SQL statement(s)");
+        out.println("  java -jar engine.jar -f <script.sql>   - Execute a SQL script file");
     }
 
     /**
