@@ -6,3 +6,5 @@ data/
 
 ours.csv
 theirs.csv
+
+dependency-reduced-pom.xml

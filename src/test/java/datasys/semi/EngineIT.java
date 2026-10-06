@@ -115,7 +115,7 @@ class EngineIT {
         Engine.main(new String[] { "-f", setupScript.toString() });
         capturedOut.reset();
 
-        Engine.main(new String[] { "SELECT * FROM trips WHERE distance > 200;" });
+        Engine.main(new String[] { "-c", "SELECT * FROM trips WHERE distance > 200;" });
 
         List<String> expectedLines = List.of(
                 "Aalborg,210,340.5",

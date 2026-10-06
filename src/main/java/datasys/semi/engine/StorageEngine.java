@@ -297,7 +297,7 @@ public final class StorageEngine {
         try {
             return readRows(dataDirectory.resolve(partition.path), catalog.schema);
         } catch (IOException exception) {
-            LOGGER.error("api=readPartition table={} partition={} failed", tableName, partition.path, exception);
+            LOGGER.error("api=readPartition table={} partition={} failed", tableName, partition.path);
             throw new IllegalStateException("Could not read partition " + partition.path, exception);
         }
     }
