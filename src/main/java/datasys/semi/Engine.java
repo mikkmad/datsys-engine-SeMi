@@ -39,7 +39,7 @@ public final class Engine {
     /**
      * Entry point executing SQL commands from the command line.
      *
-     * @param args command-line arguments: empty for help, 1 arg for SQL, or 2 args
+     * @param args command-line arguments: empty for help, 2 args (-c &lt;SQL&gt;) for a statement, or 2 args
      *             (-f &lt;file&gt;) for a script
      */
     public static void main(String[] args) {
