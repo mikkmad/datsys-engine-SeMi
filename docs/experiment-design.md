@@ -42,7 +42,7 @@ We report the average execution time based on the 8 runs.
 | | RAM       | 16GB DDR4 |
 | | OS        | Fedora 44 (BlueFin) |
 | | JVM Version | 25.0.4+7-LTS temurin |
-| | Heap Size | ... |
+| | Heap Size | 4 GB |
 | **Sebastian** | CPU | Apple M1 |
 | | RAM       | 8 GB |
 | | OS        | Sequoia 15.6.1 |
