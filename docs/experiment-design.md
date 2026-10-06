@@ -24,7 +24,7 @@ We will measure the execution of one statements in `ms`.
 
 ## Procedure
 ### Data generation 
-- python script to generate CSV files with fake data using a library.
+- python script to generate CSV files with fake data using the [Faker](https://faker.readthedocs.io/en/master/) library.
 - Fixed schema, that is a fixed column size.
 
 ### Values that vary
@@ -42,7 +42,7 @@ We report the average execution time based on the 8 runs.
 | | RAM       | 16GB DDR4 |
 | | OS        | Fedora 44 (BlueFin) |
 | | JVM Version | 25.0.4+7-LTS temurin |
-| | Heap Size | ... |
+| | Heap Size | 4 GB |
 | **Sebastian** | CPU | Apple M1 |
 | | RAM       | 8 GB |
 | | OS        | Sequoia 15.6.1 |
