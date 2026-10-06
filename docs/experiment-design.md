@@ -24,7 +24,7 @@ We will measure the execution of one statements in `ms`.
 
 ## Procedure
 ### Data generation 
-- python script to generate CSV files with fake data using a library.
+- python script to generate CSV files with fake data using the [Faker](https://faker.readthedocs.io/en/master/) library.
 - Fixed schema, that is a fixed column size.
 
 ### Values that vary
