@@ -3,8 +3,6 @@ package datasys.semi.engine;
 import datasys.semi.schema.*;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -18,7 +16,6 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -28,12 +25,6 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import datasys.semi.models.Predicate;
-import datasys.semi.models.ScanStats;
-import datasys.semi.models.SelectStatement;
-import datasys.semi.operators.Operator;
-import datasys.semi.parser.Binder;
-import datasys.semi.planner.Planner;
 
 public final class StorageEngine {
 
@@ -52,9 +43,6 @@ public final class StorageEngine {
     private final int maxRowsPerPartition;
     private final ObjectMapper objectMapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
     private final Map<String, Catalog> catalogs = new HashMap<>();
-
-    // --- Observable Metrics ---
-    private ScanStats lastScanStats = new ScanStats(0, 0, 0);
 
     public StorageEngine(Path dataDirectory) {
         this(dataDirectory, DEFAULT_MAX_ROWS_PER_PARTITION);
@@ -170,89 +158,6 @@ public final class StorageEngine {
     }
 
     /**
-     * Executes a SELECT query with a single binary predicate by planning and
-     * draining an operator pipeline.
-     *
-     * @param tableName  name of the table to query
-     * @param columnName column to evaluate the predicate against
-     * @param comparison comparison operator
-     * @param constant   typed literal value to compare with
-     * @return matching rows in schema column order
-     * @throws IllegalArgumentException if table or column is unknown, or constant
-     *                                  type mismatches
-     */
-    public List<Object[]> select(String tableName, String columnName, Comparison comparison, Object constant) {
-        LOGGER.debug("api=select table={} column={} comparison={} const={}",
-                tableName, columnName, comparison, constant);
-
-        long started = System.nanoTime();
-        SelectStatement statement = new SelectStatement(tableName,
-                Optional.empty(),
-                Optional.of(new Predicate(columnName, comparison, constant)));
-
-        List<Object[]> result = select(statement);
-
-        LOGGER.debug(
-                "table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
-                tableName, columnName, comparison, constant, lastScanStats.partitionsRead(),
-                lastScanStats.partitionsPruned(), result.size(), elapsedMillis(started));
-
-        return result;
-    }
-
-    /**
-     * Executes a SELECT statement by planning and draining an operator pipeline.
-     *
-     * @param statement the select statement to execute
-     * @return matching rows in schema column order
-     * @throws IllegalArgumentException if statement is null or table/column is
-     *                                  unknown
-     */
-    public List<Object[]> select(SelectStatement statement) {
-        if (statement == null) {
-            throw new IllegalArgumentException("statement must not be null");
-        }
-
-        Binder binder = new Binder(this);
-        binder.bind(statement);
-
-        Planner planner = new Planner(this);
-        Operator plan = planner.plan(statement);
-        this.lastScanStats = planner.lastScanStats();
-
-        return drainPipeline(plan);
-    }
-
-    /**
-     * Drains an operator pipeline to completion and returns all emitted rows.
-     *
-     * @param operator pipeline root operator
-     * @return collected rows in iteration order
-     */
-    private static List<Object[]> drainPipeline(Operator operator) {
-        operator.open();
-        try {
-            List<Object[]> rows = new ArrayList<>();
-            Object[] row;
-            while ((row = operator.next()) != null) {
-                rows.add(row);
-            }
-            return rows;
-        } finally {
-            operator.close();
-        }
-    }
-
-    /**
-     * Returns the scan statistics calculated during the most recent select query.
-     *
-     * @return the last scan statistics
-     */
-    public ScanStats getLastScanStats() {
-        return lastScanStats;
-    }
-
-    /**
      * Returns the list of partitions for a table in catalog order.
      *
      * @param tableName the name of the table to look up
@@ -361,28 +266,6 @@ public final class StorageEngine {
             case LESS_THAN -> lower <= 0;
             case GREATER_THAN -> upper >= 0;
         };
-    }
-
-    public byte[] encodeValue(ColumnType type, Object value) {
-        try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            DataOutputStream output = new DataOutputStream(bytes);
-
-            writeValue(output, type, value);
-            output.flush();
-
-            return bytes.toByteArray();
-        } catch (IOException exception) {
-            throw new IllegalStateException("Could not encode value", exception);
-        }
-    }
-
-    public Object decodeValue(ColumnType type, byte[] bytes) {
-        try {
-            return readValue(new DataInputStream(new ByteArrayInputStream(bytes)), type);
-        } catch (IOException exception) {
-            throw new IllegalArgumentException("Could not decode value", exception);
-        }
     }
 
     public MinMax minMax(List<Object> values) {

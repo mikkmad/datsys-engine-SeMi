@@ -62,7 +62,6 @@ class PlannerTest {
         assertEquals(4, stats.partitionsTotal());
         assertEquals(1, stats.partitionsRead());
         assertEquals(3, stats.partitionsPruned());
-        assertEquals(stats, planner.getLastScanStats());
 
         assertInstanceOf(FilterOperator.class, plan);
         FilterOperator filter = (FilterOperator) plan;

@@ -16,7 +16,6 @@ import datasys.semi.operators.Operator;
 import datasys.semi.operators.ProjectOperator;
 import datasys.semi.operators.ScanOperator;
 import datasys.semi.schema.ColumnSpec;
-import datasys.semi.schema.ColumnType;
 
 /**
  * Transforms bound SQL statements into executable Volcano operator pipelines.
@@ -96,15 +95,6 @@ public final class Planner {
      */
     public ScanStats lastScanStats() {
         return lastScanStats;
-    }
-
-    /**
-     * Alias for {@link #lastScanStats()} for bean compatibility.
-     *
-     * @return the last scan statistics
-     */
-    public ScanStats getLastScanStats() {
-        return lastScanStats();
     }
 
     /**
