@@ -179,9 +179,9 @@ public final class Executor {
      */
     private static String resolveOperation(Statement statement) {
         return switch (statement) {
-            case CreateTableStatement ignored -> "CREATE_TABLE";
-            case CopyStatement ignored -> "COPY";
-            case SelectStatement ignored -> "SELECT";
+            case CreateTableStatement _ -> "CREATE_TABLE";
+            case CopyStatement _ -> "COPY";
+            case SelectStatement _ -> "SELECT";
         };
     }
 
