@@ -8,3 +8,10 @@ ours.csv
 theirs.csv
 
 dependency-reduced-pom.xml
+
+# Python virtual environments
+.venv/
+venv/
+
+# Data Generated
+generated_data/

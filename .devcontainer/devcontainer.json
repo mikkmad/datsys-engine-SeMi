@@ -8,6 +8,10 @@
       "jdkDistro": "tem",
       "installMaven": "true",
       "mavenVersion": "3.9.6"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.14",
+      "installTools": false
     }
   },
   // This is a workaround fix for https://github.com/devcontainers/features/issues/1480, when using an Atomic Host.
@@ -17,18 +21,30 @@
   ],
   "customizations": {
     "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+        "python.terminal.activateEnvironment": true
+      },
       "extensions": [
         "vscjava.vscode-java-pack",
         "github.vscode-github-actions",
         "usernamehw.errorlens",
         "janisdd.vscode-edit-csv",
         "ritwickdey.LiveServer",
-        "ms-vsliveshare.vsliveshare"
+        "ms-vsliveshare.vsliveshare",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.vscode-python-envs",
+        "ms-python.debugpy",
+        "ms-python.autopep8",
+        "google.google-antigravity",
+        "anthropic.claude-code"
       ]
     }
   },
   "postCreateCommand": {
     "java-check": "java --version",
-    "mvn-check": "mvn --version"
+    "mvn-check": "mvn --version",
+    "setup-python-env": "bash ./setup-python-env.sh"
   }
 }
