@@ -2,6 +2,7 @@ from faker import Faker
 import random
 import csv
 import logging
+import os
 
 # Logging configuration
 logging.basicConfig(level=logging.DEBUG)
@@ -12,6 +13,11 @@ Faker.seed(42)  # Seed for reproducibility
 
 # Corresponds to roughly 1mb, 10mb, 100mb, and 1gb of data respectively
 file_size_targets = [40_000, 400_000, 4_000_000, 40_000_000]
+
+# If directory doesn't exist, create it
+logging.debug("Creating directory 'generated_data' if it doesn't exist...")
+os.makedirs("generated_data", exist_ok=True)
+logging.debug("Directory 'generated_data' is ready.")
 
 # Sample list of cities to speed of data generation
 logging.debug("Generating a list of 15,000 random cities...")
@@ -40,6 +46,4 @@ def generate_data(n):
 
 # Generate data for each target size
 for target_size in file_size_targets:
-    logging.debug(f"Generating data for target size: {target_size}...")
     generate_data(target_size)
-    logging.debug(f"Data generation for target size {target_size} complete.")
