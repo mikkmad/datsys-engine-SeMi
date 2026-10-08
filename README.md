@@ -68,7 +68,7 @@ Table metadata is maintained persistently in JSON format under `<dataDirectory>/
 
 ### Zone Maps & Partition Pruning
 
-To avoid expensive disk I/O, `StorageEngine.select(...)` evaluates query predicates against the min/max summaries in the catalog before opening partition files:
+To avoid expensive disk I/O, `Planner` evaluates query predicates against the min/max summaries in the catalog before opening partition files:
 - **Supported Comparisons**: `EQUALS` (`=`), `LESS_THAN` (`<`), and `GREATER_THAN` (`>`).
 - **Data Types**: Numeric comparisons for `LONG` and `DOUBLE`; lexicographic byte comparison for `STRING`.
 - **Observability**: Every scan tracks pruning statistics via `ScanStats(partitionsTotal, partitionsRead, partitionsPruned)`, and emits explicit log events for every prune or read decision.
@@ -286,4 +286,3 @@ Example lines showing partition creation, min/max logging, and pruning decisions
   - **Unit Tests (`*Test.java`)**: Focus on isolated logic (value encoders, min/max calculations, pruning decisions, CSV line parsers).
   - **Integration Tests (`*IT.java`)**: Exercise the engine end-to-end using JUnit 6 `@TempDir` to guarantee clean state and test persistence across restarts.
 - **Traceability**: All pull requests follow `.github/pull_request_template.md`, linking GitHub issues and attributing AI-assisted tooling.
-

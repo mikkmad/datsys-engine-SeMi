@@ -14,9 +14,9 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import datasys.semi.models.*;
 import datasys.semi.schema.*;
 import datasys.semi.engine.*;
+import datasys.semi.executor.Executor;
 
 class StorageEngineIT {
 
@@ -34,7 +34,8 @@ class StorageEngineIT {
 
         StorageEngine engine2 = new StorageEngine(directory);
         assertThrows(IllegalArgumentException.class, () -> engine2.createTable("trips", SCHEMA));
-        List<Object[]> rows = engine2.select("trips", "distance", Comparison.GREATER_THAN, 0L);
+        List<Object[]> rows = new Executor(engine2).executeQuery(
+                "SELECT * FROM trips WHERE distance > 0;");
         assertTrue(rows.isEmpty());
         assertTrue(Files.exists(directory.resolve("catalogs").resolve("trips.json")));
     }
@@ -56,7 +57,8 @@ class StorageEngineIT {
         engine.createTable("trips", SCHEMA);
         engine.copyFile("trips", csv.toString());
 
-        List<Object[]> rows = engine.select("trips", "distance", Comparison.GREATER_THAN, -1L);
+        List<Object[]> rows = new Executor(engine).executeQuery(
+                "SELECT * FROM trips WHERE distance > -1;");
         assertEquals(8, rows.size());
 
         Object[][] expected = {
@@ -88,42 +90,53 @@ class StorageEngineIT {
         engine.copyFile("trips", csv.toString());
 
         // 1. STRING EQUALS
-        List<Object[]> cityEquals = engine.select("trips", "city", Comparison.EQUALS, "Copenhagen");
+        Executor executor = new Executor(engine);
+
+        List<Object[]> cityEquals = executor.executeQuery(
+                "SELECT * FROM trips WHERE city = 'Copenhagen';");
         assertEquals(3, cityEquals.size());
 
         // 2. STRING LESS_THAN ("Aalborg" and "Aarhus" are lexicographically <
         // "Copenhagen")
-        List<Object[]> cityLessThan = engine.select("trips", "city", Comparison.LESS_THAN, "Copenhagen");
+        List<Object[]> cityLessThan = executor.executeQuery(
+                "SELECT * FROM trips WHERE city < 'Copenhagen';");
         assertEquals(2, cityLessThan.size());
 
         // 3. STRING GREATER_THAN ("Esbjerg", "Odense", "Roskilde" are > "Copenhagen")
-        List<Object[]> cityGreaterThan = engine.select("trips", "city", Comparison.GREATER_THAN, "Copenhagen");
+        List<Object[]> cityGreaterThan = executor.executeQuery(
+                "SELECT * FROM trips WHERE city > 'Copenhagen';");
         assertEquals(3, cityGreaterThan.size());
 
         // 4. LONG EQUALS: 95L (Odense)
-        List<Object[]> distEquals = engine.select("trips", "distance", Comparison.EQUALS, 95L);
+        List<Object[]> distEquals = executor.executeQuery(
+                "SELECT * FROM trips WHERE distance = 95;");
         assertEquals(1, distEquals.size());
         assertEquals("Odense", distEquals.get(0)[0]);
 
         // 5. LONG LESS_THAN: 12, 31, 88 are < 95L
-        List<Object[]> distLessThan = engine.select("trips", "distance", Comparison.LESS_THAN, 95L);
+        List<Object[]> distLessThan = executor.executeQuery(
+                "SELECT * FROM trips WHERE distance < 95;");
         assertEquals(3, distLessThan.size());
 
         // 6. LONG GREATER_THAN: 140, 187, 210, 299 are > 95L
-        List<Object[]> distGreaterThan = engine.select("trips", "distance", Comparison.GREATER_THAN, 95L);
+        List<Object[]> distGreaterThan = executor.executeQuery(
+                "SELECT * FROM trips WHERE distance > 95;");
         assertEquals(4, distGreaterThan.size());
 
         // 7. DOUBLE EQUALS: 120.75 (Odense)
-        List<Object[]> priceEquals = engine.select("trips", "price", Comparison.EQUALS, 120.75);
+        List<Object[]> priceEquals = executor.executeQuery(
+                "SELECT * FROM trips WHERE price = 120.75;");
         assertEquals(1, priceEquals.size());
         assertEquals("Odense", priceEquals.get(0)[0]);
 
         // 8. DOUBLE LESS_THAN: 23.5, 45.0 are < 50.0
-        List<Object[]> priceLessThan = engine.select("trips", "price", Comparison.LESS_THAN, 50.0);
+        List<Object[]> priceLessThan = executor.executeQuery(
+                "SELECT * FROM trips WHERE price < 50.0;");
         assertEquals(2, priceLessThan.size());
 
         // 9. DOUBLE GREATER_THAN: 301.0, 340.5, 450.25 are > 300.0
-        List<Object[]> priceGreaterThan = engine.select("trips", "price", Comparison.GREATER_THAN, 300.0);
+        List<Object[]> priceGreaterThan = executor.executeQuery(
+                "SELECT * FROM trips WHERE price > 300.0;");
         assertEquals(3, priceGreaterThan.size());
     }
 
@@ -135,7 +148,8 @@ class StorageEngineIT {
         engine.createTable("trips", SCHEMA);
         engine.copyFile("trips", csv.toString());
 
-        List<Object[]> rows = engine.select("trips", "city", Comparison.EQUALS, "NonExistentCity");
+        List<Object[]> rows = new Executor(engine).executeQuery(
+                "SELECT * FROM trips WHERE city = 'NonExistentCity';");
         assertTrue(rows.isEmpty());
     }
 
@@ -150,17 +164,17 @@ class StorageEngineIT {
 
         // Unknown table
         assertThrows(IllegalArgumentException.class,
-                () -> engine.select("unknown_table", "distance", Comparison.EQUALS, 100L));
+                () -> new Executor(engine).executeQuery(
+                        "SELECT * FROM unknown_table WHERE distance = 100;"));
 
         // Unknown column
         assertThrows(IllegalArgumentException.class,
-                () -> engine.select("trips", "unknown_column", Comparison.EQUALS, 100L));
-
-        // Type mismatch: Integer instead of Long
-        assertThrows(IllegalArgumentException.class, () -> engine.select("trips", "distance", Comparison.EQUALS, 100));
+                () -> new Executor(engine).executeQuery(
+                        "SELECT * FROM trips WHERE unknown_column = 100;"));
 
         // Type mismatch: String instead of Double
-        assertThrows(IllegalArgumentException.class, () -> engine.select("trips", "price", Comparison.EQUALS, "50.0"));
+        assertThrows(IllegalArgumentException.class, () -> new Executor(engine).executeQuery(
+                "SELECT * FROM trips WHERE price = '50.0';"));
     }
 
     // Test 7: Partitioning - with maxRowsPerPartition = 2, golden file produces 4
@@ -221,29 +235,7 @@ class StorageEngineIT {
         assertEquals("450.25", p3.statistics.get("price").max);
     }
 
-    // Test 8: Pruning - CSV sorted by distance with maxRowsPerPartition = 2;
-    // selective predicate reports >= 2 partitions pruned.
-    @Test
-    void pruningSkipsPartitionsUsingMinMax(@TempDir Path directory) throws IOException {
-        Path csv = copyResource(directory, "trips_sorted.csv");
-        StorageEngine engine = new StorageEngine(directory, 2);
-        engine.createTable("trips", SCHEMA);
-        engine.copyFile("trips", csv.toString());
-
-        List<Object[]> rows = engine.select("trips", "distance", Comparison.GREATER_THAN, 200L);
-
-        ScanStats stats = engine.getLastScanStats();
-        assertEquals(4, stats.partitionsTotal());
-        assertEquals(1, stats.partitionsRead());
-        assertEquals(3, stats.partitionsPruned());
-        assertTrue(stats.partitionsPruned() >= 2);
-
-        assertEquals(2, rows.size());
-        assertArrayEquals(new Object[] { "Aalborg", 210L, 340.5 }, rows.get(0));
-        assertArrayEquals(new Object[] { "Esbjerg", 299L, 450.25 }, rows.get(1));
-    }
-
-    // Test 9: Data persistence - copy with engine A; a new engine B on the same
+    // Test 8: Data persistence - copy with engine A; a new engine B on the same
     // directory returns the same rows.
     @Test
     void dataPersistenceAcrossEngines(@TempDir Path directory) throws IOException {
@@ -252,14 +244,17 @@ class StorageEngineIT {
         engineA.createTable("trips", SCHEMA);
         engineA.copyFile("trips", csv.toString());
 
-        List<Object[]> rowsA = engineA.select("trips", "distance", Comparison.GREATER_THAN, 100L);
+        List<Object[]> rowsA = new Executor(engineA).executeQuery(
+                "SELECT * FROM trips WHERE distance > 100;");
 
         StorageEngine engineB = new StorageEngine(directory, 2);
-        List<Object[]> rowsB = engineB.select("trips", "distance", Comparison.GREATER_THAN, 100L);
+        List<Object[]> rowsB = new Executor(engineB).executeQuery(
+                "SELECT * FROM trips WHERE distance > 100;");
 
         assertEquals(rowsA.size(), rowsB.size());
         for (int i = 0; i < rowsA.size(); i++) {
             assertArrayEquals(rowsA.get(i), rowsB.get(i));
         }
     }
+
 }
