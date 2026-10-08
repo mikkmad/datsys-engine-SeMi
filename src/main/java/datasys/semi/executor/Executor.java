@@ -17,6 +17,7 @@ import datasys.semi.operators.Operator;
 import datasys.semi.parser.Binder;
 import datasys.semi.parser.SqlParser;
 import datasys.semi.planner.Planner;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Orchestrates statement-by-statement execution through parse, bind, plan, and
@@ -89,6 +90,9 @@ public final class Executor {
         if (sql == null) {
             throw new IllegalArgumentException("sql must not be null");
         }
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
+        }
 
         List<Statement> statements = parser.parse(sql);
         execute(statements);
@@ -110,11 +114,14 @@ public final class Executor {
             for (Statement statement : statements) {
                 statementNumber++;
                 MDC.put("statementNumber", String.valueOf(statementNumber));
-                executeStatement(statement);
+                try {
+                    executeStatement(statement);
+                } catch (RuntimeException exception) {
+                    LOGGER.error("statement_failed operation={} reason={}",
+                            resolveOperation(statement), LogSanitizer.sanitize(exception.getMessage()));
+                    throw exception;
+                }
             }
-        } catch (RuntimeException exception) {
-            LOGGER.error("Execution failed at statementNumber={}", statementNumber);
-            throw exception;
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
@@ -165,6 +172,20 @@ public final class Executor {
     }
 
     /**
+     * Resolves the operation name for a statement for logging purposes.
+     *
+     * @param statement statement to resolve
+     * @return operation name string
+     */
+    private static String resolveOperation(Statement statement) {
+        return switch (statement) {
+            case CreateTableStatement ignored -> "CREATE_TABLE";
+            case CopyStatement ignored -> "COPY";
+            case SelectStatement ignored -> "SELECT";
+        };
+    }
+
+    /**
      * Executes a CREATE TABLE statement.
      *
      * @param statement CREATE TABLE statement
@@ -185,7 +206,7 @@ public final class Executor {
     private void executeCopy(CopyStatement statement, long started) {
         engine.copyFile(statement.tableName(), statement.csvFilePath());
         LOGGER.debug("statement=COPY table={} file={} durationMs={}",
-                statement.tableName(), statement.csvFilePath(), elapsedMillis(started));
+                statement.tableName(), LogSanitizer.sanitize(statement.csvFilePath()), elapsedMillis(started));
     }
 
     /**

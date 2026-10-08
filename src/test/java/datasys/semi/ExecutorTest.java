@@ -9,8 +9,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -133,5 +135,30 @@ class ExecutorTest {
         assertThrows(IllegalArgumentException.class, () -> executor.executeQuery(null));
         assertThrows(IllegalArgumentException.class,
                 () -> executor.executeQuery("CREATE TABLE t (x STRING); SELECT * FROM t;"));
+    }
+
+    /**
+     * Verifies that executing a failing statement emits an ERROR line containing
+     * operation and failure reason with the active statement number in MDC.
+     */
+    @Test
+    void executeFailureLogsStatementFailedWithActiveStatementNumber() throws IOException {
+        Executor executor = new Executor(engine);
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        String script = "CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);\nSELECT * FROM missing_table;";
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> executor.execute(script));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        boolean hasFailedError = logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .anyMatch(line -> line.contains(",2,") && line.contains(",ERROR,")
+                        && line.contains("statement_failed operation=SELECT reason=unknown table: missing_table"));
+        assertTrue(hasFailedError, "expected ERROR line with active statementNumber 2 and statement_failed message");
     }
 }

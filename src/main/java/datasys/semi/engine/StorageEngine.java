@@ -24,6 +24,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+
+import datasys.semi.util.LogSanitizer;
 
 
 public final class StorageEngine {
@@ -51,6 +54,9 @@ public final class StorageEngine {
     public StorageEngine(Path dataDirectory, int maxRowsPerPartition) {
         if (dataDirectory == null || maxRowsPerPartition <= 0) {
             throw new IllegalArgumentException("data directory and partition size must be valid");
+        }
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", "0");
         }
 
         this.dataDirectory = dataDirectory;
@@ -96,7 +102,7 @@ public final class StorageEngine {
     }
 
     public void copyFile(String tableName, String csvFilePath) {
-        LOGGER.debug("api=copyFile table=%s file=%s".formatted(tableName, csvFilePath));
+        LOGGER.debug("api=copyFile table=%s file=%s".formatted(tableName, LogSanitizer.sanitize(csvFilePath)));
         Catalog catalog = requireCatalog(tableName);
 
         if (!catalog.partitions.isEmpty()) {
@@ -138,9 +144,9 @@ public final class StorageEngine {
                 moveAtomically(temporaryPath, finalPath);
 
                 partitions.add(new Partition(
-                        dataDirectory.relativize(finalPath).toString(),
-                        partitionRows.size(),
-                        computeStatistics(partitionRows, catalog.schema, tableName, partitionNumber)));
+                    dataDirectory.relativize(finalPath).toString(),
+                    partitionRows.size(),
+                    computeStatistics(partitionRows, catalog.schema, tableName, partitionNumber)));
             }
 
             Catalog updated = new Catalog(catalog.table, catalog.schema, partitions);
@@ -148,7 +154,7 @@ public final class StorageEngine {
             catalogs.put(tableName, updated);
 
             LOGGER.debug("table=%s file=%s rows=%d partitions=%d durationMs=%d".formatted(
-                    tableName, Path.of(csvFilePath).getFileName(), rows.size(), partitions.size(),
+                    tableName, LogSanitizer.sanitize(Path.of(csvFilePath).getFileName()), rows.size(), partitions.size(),
                     elapsedMillis(started)));
 
         } catch (IOException exception) {
@@ -202,7 +208,7 @@ public final class StorageEngine {
         try {
             return readRows(dataDirectory.resolve(partition.path), catalog.schema);
         } catch (IOException exception) {
-            LOGGER.error("api=readPartition table={} partition={} failed", tableName, partition.path);
+            LOGGER.error("api=readPartition table={} partition={} failed", tableName, LogSanitizer.sanitize(partition.path));
             throw new IllegalStateException("Could not read partition " + partition.path, exception);
         }
     }
@@ -371,7 +377,8 @@ public final class StorageEngine {
                     new Statistics(String.valueOf(columnStatistics.min), String.valueOf(columnStatistics.max)));
 
             LOGGER.debug("table=%s partition=%d column=%s min=%s max=%s".formatted(
-                    tableName, partitionNumber, schema.get(column).name, min, max));
+                    tableName, partitionNumber, schema.get(column).name,
+                    LogSanitizer.sanitize(min), LogSanitizer.sanitize(max)));
         }
 
         return statistics;
@@ -382,7 +389,7 @@ public final class StorageEngine {
     private static Object parseValue(String value, ColumnType type) {
         return switch (type) {
             case STRING -> value;
-            case LONG -> Long.parseLong(value);
+            case LONG -> (value == null || value.isBlank()) ? 0L : Long.parseLong(value.trim());
             case DOUBLE -> {
                 double parsed = Double.parseDouble(value);
                 if (!Double.isFinite(parsed)) {
