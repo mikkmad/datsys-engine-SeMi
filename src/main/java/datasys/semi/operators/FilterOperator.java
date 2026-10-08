@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import datasys.semi.models.BoundPredicate;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Operator that pulls rows from a child and emits the ones passing a predicate.
@@ -99,7 +100,7 @@ public final class FilterOperator implements Operator {
         requireOpen();
 
         LOGGER.debug("operator=Filter column={} comparison={} const={} rowsIn={} rowsOut={}",
-                predicate.columnIndex(), predicate.comparison(), predicate.constant(), rowsIn, rowsOut);
+                predicate.columnIndex(), predicate.comparison(), LogSanitizer.sanitize(predicate.constant()), rowsIn, rowsOut);
 
         child.close();
     }
