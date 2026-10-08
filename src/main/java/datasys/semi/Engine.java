@@ -12,6 +12,7 @@ import org.slf4j.MDC;
 
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.executor.Executor;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Main command-line front door for the analytical storage engine.
@@ -20,8 +21,12 @@ import datasys.semi.executor.Executor;
  * Dispatches single-statement interactive queries, multi-statement SQL script
  * files via the {@code -f} flag, or usage help when invoked without arguments.
  * Query results are emitted to standard output as headerless CSV, while
- * operational
- * logging and error messages are written strictly to standard error.
+ * operational logging and error messages are written strictly to standard
+ * error.
+ *
+ * <p>
+ * Threading assumptions: CLI entry point designed for single-threaded
+ * sequential execution.
  */
 public final class Engine {
 
@@ -39,7 +44,8 @@ public final class Engine {
     /**
      * Entry point executing SQL commands from the command line.
      *
-     * @param args command-line arguments: empty for help, 2 args (-c &lt;SQL&gt;) for a statement, or 2 args
+     * @param args command-line arguments: empty for help, 2 args (-c &lt;SQL&gt;)
+     *             for a statement, or 2 args
      *             (-f &lt;file&gt;) for a script
      */
     public static void main(String[] args) {
@@ -69,12 +75,13 @@ public final class Engine {
             Executor executor = new Executor(engine, out);
             dispatchArguments(args, executor);
         } catch (Exception exception) {
-            LOGGER.error("Engine execution failed: {}", exception.getMessage());
+            LOGGER.error("Engine execution failed: {}", LogSanitizer.sanitize(exception.getMessage()));
             err.println("Error: " + exception.getMessage());
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
             LOGGER.debug("engine stopped");
-            MDC.clear();
+            MDC.remove("sessionId"); // subsequent sessions generates a new sessionId
+            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
     }
 

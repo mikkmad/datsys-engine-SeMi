@@ -4,15 +4,21 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import datasys.semi.models.BoundPredicate;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Operator that pulls rows from a child and emits the ones passing a predicate.
  *
+ * <p>
  * The filter is a plain row test and nothing more: it sees one row at a time,
  * compares a single column against a constant with the week 2 comparison
  * semantics, and forwards or drops the row. It knows nothing about partitions,
  * files or pruning. The row counts it observes are the honest measure of how
  * much work the scan beneath it did, so {@code close()} reports both.
+ *
+ * <p>
+ * Threading assumptions: Not thread-safe; intended for single-threaded operator
+ * pipeline execution.
  */
 public final class FilterOperator implements Operator {
 
@@ -99,7 +105,8 @@ public final class FilterOperator implements Operator {
         requireOpen();
 
         LOGGER.debug("operator=Filter column={} comparison={} const={} rowsIn={} rowsOut={}",
-                predicate.columnIndex(), predicate.comparison(), predicate.constant(), rowsIn, rowsOut);
+                predicate.columnIndex(), predicate.comparison(), LogSanitizer.sanitize(predicate.constant()), rowsIn,
+                rowsOut);
 
         child.close();
     }

@@ -17,6 +17,7 @@ import datasys.semi.operators.Operator;
 import datasys.semi.parser.Binder;
 import datasys.semi.parser.SqlParser;
 import datasys.semi.planner.Planner;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Orchestrates statement-by-statement execution through parse, bind, plan, and
@@ -31,6 +32,11 @@ import datasys.semi.planner.Planner;
  * as headerless CSV to the configured output stream. Execution halts
  * immediately
  * upon encountering any error.
+ *
+ * <p>
+ * Threading assumptions: Thread-safe for independent queries; statement
+ * sequencing in MDC
+ * is thread-local.
  */
 public final class Executor {
 
@@ -90,6 +96,10 @@ public final class Executor {
             throw new IllegalArgumentException("sql must not be null");
         }
 
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
+        }
+
         List<Statement> statements = parser.parse(sql);
         execute(statements);
     }
@@ -110,11 +120,14 @@ public final class Executor {
             for (Statement statement : statements) {
                 statementNumber++;
                 MDC.put("statementNumber", String.valueOf(statementNumber));
-                executeStatement(statement);
+                try {
+                    executeStatement(statement);
+                } catch (RuntimeException exception) {
+                    LOGGER.error("statement_failed operation={} reason={}",
+                            resolveOperation(statement), LogSanitizer.sanitize(exception.getMessage()));
+                    throw exception;
+                }
             }
-        } catch (RuntimeException exception) {
-            LOGGER.error("Execution failed at statementNumber={}", statementNumber);
-            throw exception;
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
@@ -133,6 +146,10 @@ public final class Executor {
             throw new IllegalArgumentException("sql must not be null");
         }
 
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
+        }
+
         List<Statement> statements = parser.parse(sql);
         if (statements.size() != 1 || !(statements.getFirst() instanceof SelectStatement select)) {
             throw new IllegalArgumentException("expected exactly one SELECT statement");
@@ -143,9 +160,27 @@ public final class Executor {
             binder.bind(select);
             Operator plan = planner.plan(select);
             return drainToList(plan);
+        } catch (RuntimeException exception) {
+            LOGGER.error("statement_failed operation=SELECT reason={}",
+                    LogSanitizer.sanitize(exception.getMessage()));
+            throw exception;
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
+    }
+
+    /**
+     * Resolves the uppercase operation name for a statement.
+     *
+     * @param statement the statement to inspect
+     * @return operation name string ("CREATE_TABLE", "COPY", or "SELECT")
+     */
+    private static String resolveOperation(Statement statement) {
+        return switch (statement) {
+            case CreateTableStatement createTable -> "CREATE_TABLE";
+            case CopyStatement copy -> "COPY";
+            case SelectStatement select -> "SELECT";
+        };
     }
 
     /**
@@ -185,7 +220,7 @@ public final class Executor {
     private void executeCopy(CopyStatement statement, long started) {
         engine.copyFile(statement.tableName(), statement.csvFilePath());
         LOGGER.debug("statement=COPY table={} file={} durationMs={}",
-                statement.tableName(), statement.csvFilePath(), elapsedMillis(started));
+                statement.tableName(), LogSanitizer.sanitize(statement.csvFilePath()), elapsedMillis(started));
     }
 
     /**

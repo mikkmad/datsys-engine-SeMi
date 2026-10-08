@@ -27,6 +27,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import datasys.semi.models.Predicate;
 import datasys.semi.models.ScanStats;
@@ -34,7 +35,17 @@ import datasys.semi.models.SelectStatement;
 import datasys.semi.operators.Operator;
 import datasys.semi.parser.Binder;
 import datasys.semi.planner.Planner;
+import datasys.semi.util.LogSanitizer;
 
+/**
+ * Core storage engine managing table catalogs, binary partition files, and disk
+ * I/O.
+ *
+ * <p>
+ * Threading assumptions: Table catalogs and partition files are accessed
+ * sequentially
+ * per session; catalog updates use atomic file renaming for crash safety.
+ */
 public final class StorageEngine {
 
     // --- Constants ---
@@ -56,13 +67,32 @@ public final class StorageEngine {
     // --- Observable Metrics ---
     private ScanStats lastScanStats = new ScanStats(0, 0, 0);
 
+    /**
+     * Constructs a StorageEngine using default partition sizing.
+     *
+     * @param dataDirectory base directory for catalogs and binary partition files
+     * @throws IllegalArgumentException if dataDirectory is null
+     */
     public StorageEngine(Path dataDirectory) {
         this(dataDirectory, DEFAULT_MAX_ROWS_PER_PARTITION);
     }
 
+    /**
+     * Constructs a StorageEngine with custom partition sizing.
+     *
+     * @param dataDirectory       base directory for catalogs and binary partition
+     *                            files
+     * @param maxRowsPerPartition maximum row count per binary partition
+     * @throws IllegalArgumentException if dataDirectory is null or
+     *                                  maxRowsPerPartition is non-positive
+     */
     public StorageEngine(Path dataDirectory, int maxRowsPerPartition) {
         if (dataDirectory == null || maxRowsPerPartition <= 0) {
             throw new IllegalArgumentException("data directory and partition size must be valid");
+        }
+
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", "0");
         }
 
         this.dataDirectory = dataDirectory;
@@ -79,8 +109,16 @@ public final class StorageEngine {
         }
     }
 
+    /**
+     * Creates a new table schema catalog.
+     *
+     * @param tableName name of the table to create
+     * @param columns   list of column specifications defining table schema
+     * @throws IllegalArgumentException if tableName is invalid, already exists, or
+     *                                  columns are invalid
+     */
     public void createTable(String tableName, List<ColumnSpec> columns) {
-        LOGGER.debug("api=createTable table=%s".formatted(tableName));
+        LOGGER.debug("api=createTable table={}", tableName);
 
         requireTableName(tableName);
 
@@ -104,11 +142,20 @@ public final class StorageEngine {
         writeCatalog(catalog);
         catalogs.put(tableName, catalog);
 
-        LOGGER.debug("table=%s columns=%d".formatted(tableName, schema.size()));
+        LOGGER.debug("table={} columns={}", tableName, schema.size());
     }
 
+    /**
+     * Ingests a CSV file into partitioned binary storage for an existing table.
+     *
+     * @param tableName   target table name
+     * @param csvFilePath path to the CSV file to copy
+     * @throws IllegalArgumentException      if table does not exist or CSV cannot
+     *                                       be read/parsed
+     * @throws UnsupportedOperationException if table already contains partitions
+     */
     public void copyFile(String tableName, String csvFilePath) {
-        LOGGER.debug("api=copyFile table=%s file=%s".formatted(tableName, csvFilePath));
+        LOGGER.debug("api=copyFile table={} file={}", tableName, LogSanitizer.sanitize(csvFilePath));
         Catalog catalog = requireCatalog(tableName);
 
         if (!catalog.partitions.isEmpty()) {
@@ -159,9 +206,10 @@ public final class StorageEngine {
             writeCatalog(updated);
             catalogs.put(tableName, updated);
 
-            LOGGER.debug("table=%s file=%s rows=%d partitions=%d durationMs=%d".formatted(
-                    tableName, Path.of(csvFilePath).getFileName(), rows.size(), partitions.size(),
-                    elapsedMillis(started)));
+            LOGGER.debug("table={} file={} rows={} partitions={} durationMs={}",
+                    tableName, LogSanitizer.sanitize(Path.of(csvFilePath).getFileName()), rows.size(),
+                    partitions.size(),
+                    elapsedMillis(started));
 
         } catch (IOException exception) {
             cleanupTemporaryFiles(temporaryFiles);
@@ -183,7 +231,7 @@ public final class StorageEngine {
      */
     public List<Object[]> select(String tableName, String columnName, Comparison comparison, Object constant) {
         LOGGER.debug("api=select table={} column={} comparison={} const={}",
-                tableName, columnName, comparison, constant);
+                tableName, columnName, comparison, LogSanitizer.sanitize(constant));
 
         long started = System.nanoTime();
         SelectStatement statement = new SelectStatement(tableName,
@@ -194,7 +242,7 @@ public final class StorageEngine {
 
         LOGGER.debug(
                 "table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
-                tableName, columnName, comparison, constant, lastScanStats.partitionsRead(),
+                tableName, columnName, comparison, LogSanitizer.sanitize(constant), lastScanStats.partitionsRead(),
                 lastScanStats.partitionsPruned(), result.size(), elapsedMillis(started));
 
         return result;
@@ -297,7 +345,7 @@ public final class StorageEngine {
         try {
             return readRows(dataDirectory.resolve(partition.path), catalog.schema);
         } catch (IOException exception) {
-            LOGGER.error("api=readPartition table={} partition={} failed", tableName, partition.path);
+            LOGGER.error("api=readPartition table={} partition={} failed", tableName, LogSanitizer.sanitize(partition.path));
             throw new IllegalStateException("Could not read partition " + partition.path, exception);
         }
     }
@@ -305,6 +353,7 @@ public final class StorageEngine {
     /**
      * Reads every row of a catalog partition selected by its zero-based number.
      *
+
      * @param tableName       the table owning the partition
      * @param partitionNumber zero-based partition number in catalog order
      * @return all rows of the partition, in file order and schema column order
@@ -487,8 +536,9 @@ public final class StorageEngine {
             statistics.put(schema.get(column).name,
                     new Statistics(String.valueOf(columnStatistics.min), String.valueOf(columnStatistics.max)));
 
-            LOGGER.debug("table=%s partition=%d column=%s min=%s max=%s".formatted(
-                    tableName, partitionNumber, schema.get(column).name, min, max));
+            LOGGER.debug("table={} partition={} column={} min={} max={}",
+                    tableName, partitionNumber, schema.get(column).name,
+                    LogSanitizer.sanitize(min), LogSanitizer.sanitize(max));
         }
 
         return statistics;
@@ -499,9 +549,17 @@ public final class StorageEngine {
     private static Object parseValue(String value, ColumnType type) {
         return switch (type) {
             case STRING -> value;
-            case LONG -> Long.parseLong(value);
+            case LONG -> {
+                if (value == null || value.isBlank()) {
+                    yield 0L;
+                }
+                yield Long.parseLong(value.trim());
+            }
             case DOUBLE -> {
-                double parsed = Double.parseDouble(value);
+                if (value == null || value.isBlank()) {
+                    yield 0.0;
+                }
+                double parsed = Double.parseDouble(value.trim());
                 if (!Double.isFinite(parsed)) {
                     throw new IllegalArgumentException("non-finite double");
                 }

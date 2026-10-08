@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.models.BoundPredicate;
@@ -17,6 +18,7 @@ import datasys.semi.operators.ProjectOperator;
 import datasys.semi.operators.ScanOperator;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Transforms bound SQL statements into executable Volcano operator pipelines.
@@ -28,6 +30,10 @@ import datasys.semi.schema.ColumnType;
  * evaluated,
  * pruning decisions are logged, and surviving partition numbers are passed into
  * the operator tree.
+ *
+ * <p>
+ * Threading assumptions: Not thread-safe; individual planner instances are used
+ * per query.
  */
 public final class Planner {
 
@@ -49,6 +55,9 @@ public final class Planner {
     public Planner(StorageEngine engine) {
         if (engine == null) {
             throw new IllegalArgumentException("engine must not be null");
+        }
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", "0");
         }
         this.engine = engine;
     }
@@ -119,6 +128,7 @@ public final class Planner {
         List<Integer> allPartitions = new ArrayList<>(totalPartitions);
         for (int index = 0; index < totalPartitions; index++) {
             allPartitions.add(index);
+            LOGGER.debug("table={} partition={} decision=READ reason=noPredicate", tableName, index);
         }
 
         lastScanStats = new ScanStats(totalPartitions, totalPartitions, 0);
@@ -171,6 +181,7 @@ public final class Planner {
             StorageEngine.Statistics statistics = partition.statistics.get(column.name());
 
             if (statistics == null) {
+                LOGGER.debug("table={} partition={} decision=READ reason=missingStats", tableName, partitionNumber);
                 survivingPartitions.add(partitionNumber);
                 continue;
             }
@@ -181,8 +192,12 @@ public final class Planner {
                     column.type(), predicate.comparison(), predicate.constant(), min, max);
 
             LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                    tableName, predicate.columnName(), predicate.comparison(), predicate.constant(),
-                    partitionNumber, statistics.min, statistics.max, shouldPrune ? "PRUNED" : "READ");
+                    tableName, predicate.columnName(), predicate.comparison(),
+                    LogSanitizer.sanitize(predicate.constant()),
+                    partitionNumber,
+                    LogSanitizer.sanitize(statistics.min),
+                    LogSanitizer.sanitize(statistics.max),
+                    shouldPrune ? "PRUNED" : "READ");
 
             if (!shouldPrune) {
                 survivingPartitions.add(partitionNumber);

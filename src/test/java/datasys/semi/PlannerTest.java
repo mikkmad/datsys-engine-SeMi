@@ -6,9 +6,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +33,9 @@ import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
 import datasys.semi.schema.Comparison;
 
+/**
+ * Unit tests for query planning, Volcano operator tree assembly, and partition pruning in {@link Planner}.
+ */
 class PlannerTest {
 
     // --- Test Schema ---
@@ -38,6 +48,12 @@ class PlannerTest {
     private StorageEngine engine;
     private Planner planner;
 
+    /**
+     * Initializes a storage engine with 2-row partitions and ingests sorted golden data.
+     *
+     * @param directory temporary directory injected by JUnit
+     * @throws IOException if copying test resources fails
+     */
     @BeforeEach
     void setUp(@TempDir Path directory) throws IOException {
         Path csvPath = UtilsTest.copyResource(directory, "trips_sorted.csv");
@@ -151,5 +167,63 @@ class PlannerTest {
 
         SelectStatement unknownColumn = new SelectStatement("trips", Optional.empty(), Optional.of(new Predicate("nonexistent_col", Comparison.EQUALS, "val")));
         assertThrows(IllegalArgumentException.class, () -> planner.plan(unknownColumn));
+    }
+
+    /**
+     * Verifies that planning an unfiltered SELECT emits decision=READ with reason=noPredicate
+     * for every partition in the table.
+     *
+     * @throws IOException if reading the engine log fails
+     */
+    @Test
+    void planWithoutPredicateLogsNoPredicateDecisionLines() throws IOException {
+        SelectStatement withoutWhere = new SelectStatement("trips", Optional.empty(), Optional.empty());
+        planner.plan(withoutWhere);
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        boolean hasNoPredicateLine = logLines.stream()
+                .anyMatch(line -> line.contains("table=trips partition=0 decision=READ reason=noPredicate"));
+
+        assertTrue(hasNoPredicateLine, "expected decision=READ reason=noPredicate log line for partition 0");
+    }
+
+    /**
+     * Verifies that when a partition is missing column statistics, the planner retains the partition
+     * and logs decision=READ with reason=missingStats.
+     *
+     * @param directory temporary directory for storage engine files
+     * @throws IOException if reading or writing catalog files or engine log fails
+     */
+    @Test
+    void prunePartitionsKeepsPartitionAndLogsWhenStatisticsAreMissing(@TempDir Path directory) throws IOException {
+        String testTable = "test_table_" + UUID.randomUUID().toString().replace("-", "");
+        Path csvPath = UtilsTest.copyResource(directory, "trips_sorted.csv");
+        StorageEngine storageEngine = new StorageEngine(directory, 2);
+        storageEngine.createTable(testTable, SCHEMA);
+        storageEngine.copyFile(testTable, csvPath.toString());
+
+        Path catalogPath = directory.resolve("catalogs").resolve(testTable + ".json");
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode rootNode = mapper.readTree(catalogPath.toFile());
+        ((ObjectNode) rootNode.get("partitions").get(0).get("statistics")).remove("distance");
+        mapper.writeValue(catalogPath.toFile(), rootNode);
+
+        StorageEngine reloadedEngine = new StorageEngine(directory, 2);
+        Planner reloadedPlanner = new Planner(reloadedEngine);
+
+        SelectStatement statement = new SelectStatement(
+                testTable, Optional.empty(), Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)));
+        reloadedPlanner.plan(statement);
+
+        ScanStats stats = reloadedPlanner.lastScanStats();
+        assertEquals(4, stats.partitionsTotal());
+        assertEquals(2, stats.partitionsRead(), "partition 0 (missing stats) and partition 3 should be read");
+        assertEquals(2, stats.partitionsPruned());
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        String expectedDecisionLine = "table=" + testTable + " partition=0 decision=READ reason=missingStats";
+        boolean hasMissingStatsLine = logLines.stream().anyMatch(line -> line.contains(expectedDecisionLine));
+
+        assertTrue(hasMissingStatsLine, "expected missingStats log line for partition 0");
     }
 }

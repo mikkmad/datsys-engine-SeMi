@@ -40,6 +40,10 @@ public final class SqlParser {
             throw new IllegalArgumentException("SQL text must not be null");
         }
 
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", "0");
+        }
+
         long startNanoTime = System.nanoTime();
 
         try {
