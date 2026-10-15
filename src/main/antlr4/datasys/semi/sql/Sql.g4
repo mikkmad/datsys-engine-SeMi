@@ -11,7 +11,8 @@ columnType  : STRING | LONG | DOUBLE ;
 
 copy        : COPY IDENTIFIER FROM STRING_LITERAL ;
 
-select      : SELECT '*' FROM IDENTIFIER (WHERE predicate)? ;
+select      : SELECT ('*' | columnList) FROM IDENTIFIER (WHERE predicate)? ;
+columnList  : IDENTIFIER (',' IDENTIFIER)* ;
 predicate   : IDENTIFIER comparison=('=' | '<' | '>') literal ;
 literal     : STRING_LITERAL | DOUBLE_LITERAL | LONG_LITERAL ;
 

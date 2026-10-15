@@ -1,0 +1,54 @@
+~/Documents/School/ITU/candidate/3_Semester/HTBDS/datsys-engine-SeMi (exercise5) » ./engine -c "SELECT * FROM logs WHERE sessionId = '7f584950-8f9b-4faf-888d-21e99bfa1c98';"
+20:09:53.410 DEBUG Engine - engine started
+20:09:53.494 DEBUG SqlParser - statements=1 durationMs=13
+20:09:53.496 DEBUG Planner - table=logs column=sessionId comparison=EQUALS const=7f584950-8f9b-4faf-888d-21e99bfa1c98 partition=0 min=6c148233-041b-4dcc-a2dd-f8e8085ca865 max=d3b5eb9c-878a-4ee0-ac60-b6fa3ac63409 decision=READ
+20:09:53.497 DEBUG ScanOperator - operator=Scan table=logs partitions=1
+2026-10-06 20:02:09.687,7f584950-8f9b-4faf-888d-21e99bfa1c98,0,3,DEBUG,Engine,engine started
+2026-10-06 20:02:09.742,7f584950-8f9b-4faf-888d-21e99bfa1c98,0,3,DEBUG,SqlParser,statements=4 durationMs=16
+2026-10-06 20:02:09.744,7f584950-8f9b-4faf-888d-21e99bfa1c98,1,3,DEBUG,StorageEngine,api=createTable table=trips
+2026-10-06 20:02:09.767,7f584950-8f9b-4faf-888d-21e99bfa1c98,1,3,DEBUG,StorageEngine,table=trips columns=3
+2026-10-06 20:02:09.767,7f584950-8f9b-4faf-888d-21e99bfa1c98,1,3,DEBUG,Executor,statement=CREATE_TABLE table=trips durationMs=24
+2026-10-06 20:02:09.767,7f584950-8f9b-4faf-888d-21e99bfa1c98,2,3,DEBUG,StorageEngine,api=copyFile table=trips file=src/main/resources/trips.csv
+2026-10-06 20:02:09.770,7f584950-8f9b-4faf-888d-21e99bfa1c98,2,3,DEBUG,StorageEngine,table=trips partition=0 column=city min=Aalborg max=Roskilde
+2026-10-06 20:02:09.770,7f584950-8f9b-4faf-888d-21e99bfa1c98,2,3,DEBUG,StorageEngine,table=trips partition=0 column=distance min=12 max=299
+2026-10-06 20:02:09.770,7f584950-8f9b-4faf-888d-21e99bfa1c98,2,3,DEBUG,StorageEngine,table=trips partition=0 column=price min=23.5 max=450.25
+2026-10-06 20:02:09.774,7f584950-8f9b-4faf-888d-21e99bfa1c98,2,3,DEBUG,StorageEngine,table=trips file=trips.csv rows=8 partitions=1 durationMs=6
+2026-10-06 20:02:09.774,7f584950-8f9b-4faf-888d-21e99bfa1c98,2,3,DEBUG,Executor,statement=COPY table=trips file=src/main/resources/trips.csv durationMs=7
+2026-10-06 20:02:09.775,7f584950-8f9b-4faf-888d-21e99bfa1c98,3,3,DEBUG,ScanOperator,operator=Scan table=trips partitions=1
+2026-10-06 20:02:09.775,7f584950-8f9b-4faf-888d-21e99bfa1c98,3,3,DEBUG,ScanOperator,operator=Scan table=trips partitionsRead=1 rowsOut=8
+2026-10-06 20:02:09.776,7f584950-8f9b-4faf-888d-21e99bfa1c98,3,3,DEBUG,Executor,statement=SELECT table=trips rowsOut=8 durationMs=1
+2026-10-06 20:02:09.776,7f584950-8f9b-4faf-888d-21e99bfa1c98,4,3,DEBUG,Planner,table=trips column=city comparison=EQUALS const=Odense partition=0 min=Aalborg max=Roskilde decision=READ
+2026-10-06 20:02:09.777,7f584950-8f9b-4faf-888d-21e99bfa1c98,4,3,DEBUG,ScanOperator,operator=Scan table=trips partitions=1
+2026-10-06 20:02:09.777,7f584950-8f9b-4faf-888d-21e99bfa1c98,4,3,DEBUG,FilterOperator,operator=Filter column=0 comparison=EQUALS const=Odense rowsIn=8 rowsOut=1
+2026-10-06 20:02:09.777,7f584950-8f9b-4faf-888d-21e99bfa1c98,4,3,DEBUG,ScanOperator,operator=Scan table=trips partitionsRead=1 rowsOut=8
+2026-10-06 20:02:09.777,7f584950-8f9b-4faf-888d-21e99bfa1c98,4,3,DEBUG,Executor,statement=SELECT table=trips rowsOut=1 durationMs=1
+2026-10-06 20:02:09.777,7f584950-8f9b-4faf-888d-21e99bfa1c98,0,3,DEBUG,Engine,engine stopped
+20:09:53.500 DEBUG FilterOperator - operator=Filter column=1 comparison=EQUALS const=7f584950-8f9b-4faf-888d-21e99bfa1c98 rowsIn=34 rowsOut=20
+20:09:53.500 DEBUG ScanOperator - operator=Scan table=logs partitionsRead=1 rowsOut=34
+20:09:53.500 DEBUG Executor - statement=SELECT table=logs rowsOut=20 durationMs=6
+20:09:53.500 DEBUG Engine - engine stopped
+(base) -----------------------------------------------------------------------------------------------------------------------
+~/Documents/School/ITU/candidate/3_Semester/HTBDS/datsys-engine-SeMi (exercise5) » ./engine -c "SELECT * FROM logs WHERE statementNumber = 3;"
+20:09:55.971 DEBUG Engine - engine started
+20:09:56.051 DEBUG SqlParser - statements=1 durationMs=12
+20:09:56.053 DEBUG Planner - table=logs column=statementNumber comparison=EQUALS const=3 partition=0 min=0 max=4 decision=READ
+20:09:56.054 DEBUG ScanOperator - operator=Scan table=logs partitions=1
+2026-10-06 20:02:09.775,7f584950-8f9b-4faf-888d-21e99bfa1c98,3,3,DEBUG,ScanOperator,operator=Scan table=trips partitions=1
+2026-10-06 20:02:09.775,7f584950-8f9b-4faf-888d-21e99bfa1c98,3,3,DEBUG,ScanOperator,operator=Scan table=trips partitionsRead=1 rowsOut=8
+2026-10-06 20:02:09.776,7f584950-8f9b-4faf-888d-21e99bfa1c98,3,3,DEBUG,Executor,statement=SELECT table=trips rowsOut=8 durationMs=1
+20:09:56.057 DEBUG FilterOperator - operator=Filter column=2 comparison=EQUALS const=3 rowsIn=34 rowsOut=3
+20:09:56.057 DEBUG ScanOperator - operator=Scan table=logs partitionsRead=1 rowsOut=34
+20:09:56.057 DEBUG Executor - statement=SELECT table=logs rowsOut=3 durationMs=6
+20:09:56.057 DEBUG Engine - engine stopped
+(base) -----------------------------------------------------------------------------------------------------------------------
+~/Documents/School/ITU/candidate/3_Semester/HTBDS/datsys-engine-SeMi (exercise5) » ./engine -c "SELECT * FROM logs WHERE logLevel = 'ERROR';"
+20:10:32.759 DEBUG Engine - engine started
+20:10:32.848 DEBUG SqlParser - statements=1 durationMs=14
+20:10:32.851 DEBUG Planner - table=logs column=logLevel comparison=EQUALS const=ERROR partition=0 min=DEBUG max=ERROR decision=READ
+20:10:32.851 DEBUG ScanOperator - operator=Scan table=logs partitions=1
+2026-10-06 20:02:41.748,a751bd4e-f6e8-4b31-a35a-eab9abc008d5,1,3,ERROR,Executor,Execution failed at statementNumber=1
+2026-10-06 20:02:41.749,a751bd4e-f6e8-4b31-a35a-eab9abc008d5,0,3,ERROR,Engine,Engine execution failed: unknown table: users
+20:10:32.854 DEBUG FilterOperator - operator=Filter column=4 comparison=EQUALS const=ERROR rowsIn=34 rowsOut=2
+20:10:32.854 DEBUG ScanOperator - operator=Scan table=logs partitionsRead=1 rowsOut=34
+20:10:32.854 DEBUG Executor - statement=SELECT table=logs rowsOut=2 durationMs=6
+20:10:32.854 DEBUG Engine - engine stopped

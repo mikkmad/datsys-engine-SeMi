@@ -13,15 +13,18 @@ public record CopyStatement(String tableName, String csvFilePath)
      * Constructs a CopyStatement with validation.
      *
      * @param tableName   name of the table to copy data into
-     * @param csvFilePath path to the CSV file to load
-     * @throws IllegalArgumentException if tableName or csvFilePath is null or blank
+     * @param csvFilePath path to the CSV file to load; may be empty, since the
+     *                    grammar accepts {@code ''} and whether the file is
+     *                    readable is checked at execution time
+     * @throws IllegalArgumentException if tableName is null or blank, or
+     *                                  csvFilePath is null
      */
     public CopyStatement {
         if (tableName == null || tableName.isBlank()) {
             throw new IllegalArgumentException("table name must not be null or blank");
         }
-        if (csvFilePath == null || csvFilePath.isBlank()) {
-            throw new IllegalArgumentException("CSV file path must not be null or blank");
+        if (csvFilePath == null) {
+            throw new IllegalArgumentException("CSV file path must not be null");
         }
     }
 }

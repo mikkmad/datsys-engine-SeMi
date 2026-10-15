@@ -3,8 +3,6 @@ package datasys.semi.engine;
 import datasys.semi.schema.*;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -26,8 +24,10 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
-import datasys.semi.models.ScanStats;
+import datasys.semi.util.LogSanitizer;
+
 
 public final class StorageEngine {
 
@@ -47,9 +47,6 @@ public final class StorageEngine {
     private final ObjectMapper objectMapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
     private final Map<String, Catalog> catalogs = new HashMap<>();
 
-    // --- Observable Metrics ---
-    private ScanStats lastScanStats = new ScanStats(0, 0, 0);
-
     public StorageEngine(Path dataDirectory) {
         this(dataDirectory, DEFAULT_MAX_ROWS_PER_PARTITION);
     }
@@ -57,6 +54,9 @@ public final class StorageEngine {
     public StorageEngine(Path dataDirectory, int maxRowsPerPartition) {
         if (dataDirectory == null || maxRowsPerPartition <= 0) {
             throw new IllegalArgumentException("data directory and partition size must be valid");
+        }
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", "0");
         }
 
         this.dataDirectory = dataDirectory;
@@ -102,7 +102,7 @@ public final class StorageEngine {
     }
 
     public void copyFile(String tableName, String csvFilePath) {
-        LOGGER.debug("api=copyFile table=%s file=%s".formatted(tableName, csvFilePath));
+        LOGGER.debug("api=copyFile table=%s file=%s".formatted(tableName, LogSanitizer.sanitize(csvFilePath)));
         Catalog catalog = requireCatalog(tableName);
 
         if (!catalog.partitions.isEmpty()) {
@@ -144,9 +144,9 @@ public final class StorageEngine {
                 moveAtomically(temporaryPath, finalPath);
 
                 partitions.add(new Partition(
-                        dataDirectory.relativize(finalPath).toString(),
-                        partitionRows.size(),
-                        computeStatistics(partitionRows, catalog.schema, tableName, partitionNumber)));
+                    dataDirectory.relativize(finalPath).toString(),
+                    partitionRows.size(),
+                    computeStatistics(partitionRows, catalog.schema, tableName, partitionNumber)));
             }
 
             Catalog updated = new Catalog(catalog.table, catalog.schema, partitions);
@@ -154,7 +154,7 @@ public final class StorageEngine {
             catalogs.put(tableName, updated);
 
             LOGGER.debug("table=%s file=%s rows=%d partitions=%d durationMs=%d".formatted(
-                    tableName, Path.of(csvFilePath).getFileName(), rows.size(), partitions.size(),
+                    tableName, LogSanitizer.sanitize(Path.of(csvFilePath).getFileName()), rows.size(), partitions.size(),
                     elapsedMillis(started)));
 
         } catch (IOException exception) {
@@ -163,64 +163,16 @@ public final class StorageEngine {
         }
     }
 
-    public List<Object[]> select(String tableName, String columnName, Comparison comparison, Object constant) {
-        LOGGER.debug("api=select table=%s column=%s comparison=%s const=%s".formatted(tableName, columnName, comparison,
-                constant));
+    /**
+     * Returns the list of partitions for a table in catalog order.
+     *
+     * @param tableName the name of the table to look up
+     * @return unmodifiable list of partitions
+     * @throws IllegalArgumentException if the table is unknown or tableName is null
+     */
+    public List<Partition> partitions(String tableName) {
         Catalog catalog = requireCatalog(tableName);
-
-        int predicateColumn = columnIndex(catalog.schema, columnName);
-        Column column = catalog.schema.get(predicateColumn);
-        validateConstant(column.type, constant);
-
-        long started = System.nanoTime();
-        int read = 0;
-        int pruned = 0;
-
-        List<Object[]> result = new ArrayList<>();
-        ColumnType type = ColumnType.valueOf(column.type);
-
-        for (int partitionNumber = 0; partitionNumber < catalog.partitions.size(); partitionNumber++) {
-            Partition partition = catalog.partitions.get(partitionNumber);
-            Statistics statistics = partition.statistics.get(columnName);
-
-            Object min = parseStatistic(statistics.min, type);
-            Object max = parseStatistic(statistics.max, type);
-
-            boolean shouldPrune = shouldPrune(type, comparison, constant, min, max);
-            LOGGER.debug("table=%s column=%s comparison=%s const=%s partition=%d min=%s max=%s decision=%s".formatted(
-                    tableName, columnName, comparison, constant, partitionNumber, statistics.min, statistics.max,
-                    shouldPrune ? "PRUNED" : "READ"));
-
-            if (shouldPrune) {
-                pruned++;
-                continue;
-            }
-
-            read++;
-            try {
-                result.addAll(readMatchingRows(
-                        dataDirectory.resolve(partition.path),
-                        catalog.schema,
-                        predicateColumn,
-                        comparison,
-                        constant));
-            } catch (IOException exception) {
-                throw new IllegalStateException("Could not read partition " + partition.path, exception);
-            }
-        }
-
-        lastScanStats = new ScanStats(catalog.partitions.size(), read, pruned);
-
-        LOGGER.debug(
-                "table=%s column=%s comparison=%s const=%s partitionsRead=%d partitionsPruned=%d rowsOut=%d durationMs=%d"
-                        .formatted(tableName, columnName, comparison, constant, read, pruned, result.size(),
-                                elapsedMillis(started)));
-
-        return result;
-    }
-
-    public ScanStats getLastScanStats() {
-        return lastScanStats;
+        return List.copyOf(catalog.partitions);
     }
 
     /**
@@ -235,6 +187,49 @@ public final class StorageEngine {
         return catalog.schema.stream()
                 .map(column -> new ColumnSpec(column.name, ColumnType.valueOf(column.type)))
                 .toList();
+    }
+
+    /**
+     * Reads every row of one partition. No predicate is involved: this is the plain
+     * read the scan operator performs once the planner has chosen the partition.
+     *
+     * @param tableName the table owning the partition
+     * @param partition the partition to read, as taken from {@link #partitions}
+     * @return all rows of the partition, in file order and schema column order
+     * @throws IllegalArgumentException if the table is unknown or partition is null
+     * @throws IllegalStateException    if the partition file cannot be read
+     */
+    public List<Object[]> readPartition(String tableName, Partition partition) {
+        Catalog catalog = requireCatalog(tableName);
+        if (partition == null) {
+            throw new IllegalArgumentException("partition must not be null");
+        }
+
+        try {
+            return readRows(dataDirectory.resolve(partition.path), catalog.schema);
+        } catch (IOException exception) {
+            LOGGER.error("api=readPartition table={} partition={} failed", tableName, LogSanitizer.sanitize(partition.path));
+            throw new IllegalStateException("Could not read partition " + partition.path, exception);
+        }
+    }
+
+    /**
+     * Reads every row of a catalog partition selected by its zero-based number.
+     *
+     * @param tableName       the table owning the partition
+     * @param partitionNumber zero-based partition number in catalog order
+     * @return all rows of the partition, in file order and schema column order
+     * @throws IllegalArgumentException if the table is unknown or the partition
+     *                                  number is outside the catalog range
+     * @throws IllegalStateException    if the partition file cannot be read
+     */
+    public List<Object[]> readPartition(String tableName, int partitionNumber) {
+        Catalog catalog = requireCatalog(tableName);
+        if (partitionNumber < 0 || partitionNumber >= catalog.partitions.size()) {
+            throw new IllegalArgumentException("partition number out of range: " + partitionNumber);
+        }
+
+        return readPartition(tableName, catalog.partitions.get(partitionNumber));
     }
 
     // --- Package-Private Methods (Visible for Unit Testing) ---
@@ -257,6 +252,17 @@ public final class StorageEngine {
         return values;
     }
 
+    /**
+     * Determines whether a partition should be pruned based on column min/max
+     * summaries.
+     *
+     * @param type       column type
+     * @param comparison comparison operator
+     * @param constant   filter literal constant
+     * @param min        partition minimum value
+     * @param max        partition maximum value
+     * @return true if the partition can be safely pruned, false otherwise
+     */
     public boolean shouldPrune(ColumnType type, Comparison comparison, Object constant, Object min, Object max) {
         int lower = compare(constant, min);
         int upper = compare(constant, max);
@@ -266,28 +272,6 @@ public final class StorageEngine {
             case LESS_THAN -> lower <= 0;
             case GREATER_THAN -> upper >= 0;
         };
-    }
-
-    public byte[] encodeValue(ColumnType type, Object value) {
-        try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            DataOutputStream output = new DataOutputStream(bytes);
-
-            writeValue(output, type, value);
-            output.flush();
-
-            return bytes.toByteArray();
-        } catch (IOException exception) {
-            throw new IllegalStateException("Could not encode value", exception);
-        }
-    }
-
-    public Object decodeValue(ColumnType type, byte[] bytes) {
-        try {
-            return readValue(new DataInputStream(new ByteArrayInputStream(bytes)), type);
-        } catch (IOException exception) {
-            throw new IllegalArgumentException("Could not decode value", exception);
-        }
     }
 
     public MinMax minMax(List<Object> values) {
@@ -341,8 +325,16 @@ public final class StorageEngine {
         }
     }
 
-    private List<Object[]> readMatchingRows(Path path, List<Column> schema, int predicateColumn,
-            Comparison comparison, Object constant) throws IOException {
+    /**
+     * Decodes every row of a partition file. This is the single place the binary
+     * partition format is read; callers that need a subset filter afterwards.
+     *
+     * @param path   the partition data file to read
+     * @param schema the table schema, in column order
+     * @return all rows of the partition, in file order
+     * @throws IOException if the file cannot be read or its header is invalid
+     */
+    private List<Object[]> readRows(Path path, List<Column> schema) throws IOException {
         List<Object[]> rows = new ArrayList<>();
 
         try (DataInputStream input = new DataInputStream(Files.newInputStream(path))) {
@@ -362,10 +354,7 @@ public final class StorageEngine {
                 for (int column = 0; column < schema.size(); column++) {
                     row[column] = readValue(input, ColumnType.valueOf(schema.get(column).type));
                 }
-
-                if (matches(row[predicateColumn], comparison, constant)) {
-                    rows.add(row);
-                }
+                rows.add(row);
             }
         }
 
@@ -388,7 +377,8 @@ public final class StorageEngine {
                     new Statistics(String.valueOf(columnStatistics.min), String.valueOf(columnStatistics.max)));
 
             LOGGER.debug("table=%s partition=%d column=%s min=%s max=%s".formatted(
-                    tableName, partitionNumber, schema.get(column).name, min, max));
+                    tableName, partitionNumber, schema.get(column).name,
+                    LogSanitizer.sanitize(min), LogSanitizer.sanitize(max)));
         }
 
         return statistics;
@@ -399,7 +389,7 @@ public final class StorageEngine {
     private static Object parseValue(String value, ColumnType type) {
         return switch (type) {
             case STRING -> value;
-            case LONG -> Long.parseLong(value);
+            case LONG -> (value == null || value.isBlank()) ? 0L : Long.parseLong(value.trim());
             case DOUBLE -> {
                 double parsed = Double.parseDouble(value);
                 if (!Double.isFinite(parsed)) {
@@ -410,7 +400,15 @@ public final class StorageEngine {
         };
     }
 
-    private static Object parseStatistic(Object value, ColumnType type) {
+    /**
+     * Parses a string or raw statistic value into the appropriate Java type for the
+     * column.
+     *
+     * @param value raw statistic value
+     * @param type  column type
+     * @return parsed typed object
+     */
+    public static Object parseStatistic(Object value, ColumnType type) {
         if (type == ColumnType.STRING) {
             return String.valueOf(value);
         }
@@ -454,15 +452,6 @@ public final class StorageEngine {
 
     // --- Predicate Evaluation & Comparisons ---
 
-    private static boolean matches(Object value, Comparison comparison, Object constant) {
-        int result = compare(value, constant);
-        return switch (comparison) {
-            case EQUALS -> result == 0;
-            case LESS_THAN -> result < 0;
-            case GREATER_THAN -> result > 0;
-        };
-    }
-
     @SuppressWarnings({ "unchecked", "rawtypes" })
     private static int compare(Object left, Object right) {
         return ((Comparable) left).compareTo(right);
@@ -484,26 +473,6 @@ public final class StorageEngine {
             throw new IllegalArgumentException("unknown table: " + tableName);
         }
         return catalog;
-    }
-
-    private static int columnIndex(List<Column> schema, String columnName) {
-        for (int index = 0; index < schema.size(); index++) {
-            if (schema.get(index).name.equals(columnName)) {
-                return index;
-            }
-        }
-        throw new IllegalArgumentException("unknown column: " + columnName);
-    }
-
-    private static void validateConstant(String typeName, Object constant) {
-        boolean valid = switch (ColumnType.valueOf(typeName)) {
-            case STRING -> constant instanceof String;
-            case LONG -> constant instanceof Long;
-            case DOUBLE -> constant instanceof Double;
-        };
-        if (!valid) {
-            throw new IllegalArgumentException("constant type does not match column type");
-        }
     }
 
     private static void requireTableName(String tableName) {

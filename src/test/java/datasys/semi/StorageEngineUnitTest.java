@@ -6,22 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-import datasys.semi.schema.*;
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.schema.*;
 
 class StorageEngineUnitTest {
     private final StorageEngine engine = new StorageEngine(java.nio.file.Path.of("target/unit-storage"));
-
-    @Test
-    void valuesRoundTrip() {
-        assertEquals("Odense", engine.decodeValue(ColumnType.STRING,
-                engine.encodeValue(ColumnType.STRING, "Odense")));
-        assertEquals(-42L, engine.decodeValue(ColumnType.LONG,
-                engine.encodeValue(ColumnType.LONG, -42L)));
-        assertEquals(12.5, engine.decodeValue(ColumnType.DOUBLE,
-                engine.encodeValue(ColumnType.DOUBLE, 12.5)));
-    }
 
     @Test
     void computesMinAndMax() {
