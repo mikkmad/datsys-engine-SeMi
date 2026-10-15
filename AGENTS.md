@@ -35,7 +35,7 @@ Both documents are named `exercise<X>_<Y>_<summary_in_snake_case>.md` (e.g. `exe
 
 ## 4. Front Door I/O
 
-- `stdout`: only headerless CSV rows from `SELECT`. Nothing else.
+- `stdout`: only headerless CSV rows from `SELECT`. The one exception is the team name and usage text printed when the engine runs with no arguments (Exercises 1 and 4). Nothing else.
 - `stderr`: all human-readable errors and diagnostics.
 - `System.out` / `System.err` are used only in `Engine.java`, never in the storage engine, planner, operators, or catalogs.
 - On failure, `Engine.main` prints `e.getMessage()` to `stderr`.
@@ -43,7 +43,7 @@ Both documents are named `exercise<X>_<Y>_<summary_in_snake_case>.md` (e.g. `exe
 
 ## 5. Logging
 
-Specs: `exercise_descriptions/Exercise1.md` and `Exercise4.md`. The engine later queries its own log via `COPY` / `SELECT`, so every log line must be a valid CSV row.
+Specs: `exercise_descriptions/Exercise1.md`, `Exercise3.md`, `Exercise4.md`, and `Exercise5.md`. The engine later queries its own log via `COPY` / `SELECT`, so every log line must be a valid CSV row.
 
 **Format** (Log4j2 pattern):
 ```
@@ -53,9 +53,9 @@ Columns: `timestamp, sessionId, statementNumber, threadId, logLevel, className, 
 
 **Rules**
 - Only `LOGGER.debug` (normal flow) and `LOGGER.error` (failures). No `info`, `warn`, or `trace`.
-- Use parameterized messages in `key=value` form, with no commas or line breaks.
+- Use parameterized messages in `key=value` form, with no commas, double quotes, or line breaks (Exercise 5).
 - Never pass a `Throwable` to SLF4J, because the stack trace breaks the CSV layout.
-- Every thrown exception leaves at least one error line, in the form `LOGGER.error("statement={} error={}", statementType, LogSanitizer.sanitize(e.getMessage()))`.
+- Every thrown exception leaves at least one error line, in the form `LOGGER.error("statement={} error={}", statementType, LogSanitizer.sanitize(e.getMessage()))`. Exception: parse failures log `failed line={} col={} durationMs={}` (Exercise 3) and need no message text.
 - Exception messages are not guaranteed to be single-line or comma-free (they can be `null` or come from the JDK or libraries). Always pass them and any other free text, such as file paths or SQL fragments, through `LogSanitizer.sanitize(...)` (`datasys.semi.util`; do not write your own) before logging.
 
 **MDC ownership**
