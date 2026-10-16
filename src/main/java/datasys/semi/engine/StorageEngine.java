@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,14 +29,13 @@ import org.slf4j.MDC;
 
 import datasys.semi.util.LogSanitizer;
 
-
 public final class StorageEngine {
 
     // --- Constants ---
     private static final Logger LOGGER = LoggerFactory.getLogger(StorageEngine.class);
     private static final byte[] MAGIC = { 'S', 'E', 'M', 'I' };
     private static final short FORMAT_VERSION = 1;
-    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 1024;
+    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 10000;
 
     // --- Directory Paths ---
     private final Path dataDirectory;
@@ -101,6 +101,20 @@ public final class StorageEngine {
         LOGGER.debug("table=%s columns=%d".formatted(tableName, schema.size()));
     }
 
+    /**
+     * Loads a headerless CSV file into an empty table by streaming it: at most one
+     * partition of parsed rows is held in memory at a time. The copy is
+     * all-or-nothing; the catalog is only updated after the last partition is
+     * written, and a failed copy deletes every partition file it wrote.
+     *
+     * @param tableName   name of an existing table that has no partitions yet
+     * @param csvFilePath path of the CSV file to load
+     * @throws IllegalArgumentException      if the table is unknown, the file cannot
+     *                                       be read, or a line is malformed
+     * @throws UnsupportedOperationException if the table already holds data
+     * @throws IllegalStateException         if a partition or the catalog cannot be
+     *                                       written
+     */
     public void copyFile(String tableName, String csvFilePath) {
         LOGGER.debug("api=copyFile table=%s file=%s".formatted(tableName, LogSanitizer.sanitize(csvFilePath)));
         Catalog catalog = requireCatalog(tableName);
@@ -110,56 +124,24 @@ public final class StorageEngine {
         }
 
         long started = System.nanoTime();
-        List<Object[]> rows = new ArrayList<>();
-
-        try (BufferedReader reader = Files.newBufferedReader(Path.of(csvFilePath), StandardCharsets.UTF_8)) {
-            String line;
-            int lineNumber = 0;
-
-            while ((line = reader.readLine()) != null) {
-                lineNumber++;
-                rows.add(parseCsvLine(line, csvFilePath, lineNumber, catalog.schema));
-            }
-        } catch (IOException exception) {
-            throw new IllegalArgumentException("Could not read " + csvFilePath, exception);
-        }
-
-        List<Partition> partitions = new ArrayList<>();
-        List<Path> temporaryFiles = new ArrayList<>();
+        // Only valid while a table accepts a single COPY: data/<table>/ then holds no
+        // committed partitions, so it can be cleared before and deleted after a failure.
+        Path tableDirectory = dataFilesDirectory.resolve(tableName);
+        boolean committed = false;
 
         try {
-            for (int start = 0,
-                    partitionNumber = 0; start < rows.size(); start += maxRowsPerPartition, partitionNumber++) {
-                int end = Math.min(start + maxRowsPerPartition, rows.size());
-                List<Object[]> partitionRows = rows.subList(start, end);
-
-                Path finalPath = dataFilesDirectory.resolve(tableName)
-                        .resolve("partition-%d.dat".formatted(partitionNumber));
-                Files.createDirectories(finalPath.getParent());
-
-                Path temporaryPath = finalPath.resolveSibling(finalPath.getFileName() + ".tmp-" + UUID.randomUUID());
-                temporaryFiles.add(temporaryPath);
-
-                writePartition(temporaryPath, partitionRows, catalog.schema);
-                moveAtomically(temporaryPath, finalPath);
-
-                partitions.add(new Partition(
-                    dataDirectory.relativize(finalPath).toString(),
-                    partitionRows.size(),
-                    computeStatistics(partitionRows, catalog.schema, tableName, partitionNumber)));
+            deleteDirectoryRecursively(tableDirectory);
+            List<Partition> partitions = streamCsvIntoPartitions(tableName, csvFilePath, catalog, tableDirectory);
+            commitCatalog(catalog, partitions);
+            committed = true;
+            logCopySummary(tableName, csvFilePath, partitions, started);
+        } catch (RuntimeException exception) {
+            LOGGER.error("api=copyFile table={} error={}", tableName, LogSanitizer.sanitize(exception.getMessage()));
+            throw exception;
+        } finally {
+            if (!committed) {
+                discardFailedCopy(tableDirectory);
             }
-
-            Catalog updated = new Catalog(catalog.table, catalog.schema, partitions);
-            writeCatalog(updated);
-            catalogs.put(tableName, updated);
-
-            LOGGER.debug("table=%s file=%s rows=%d partitions=%d durationMs=%d".formatted(
-                    tableName, LogSanitizer.sanitize(Path.of(csvFilePath).getFileName()), rows.size(), partitions.size(),
-                    elapsedMillis(started)));
-
-        } catch (IOException exception) {
-            cleanupTemporaryFiles(temporaryFiles);
-            throw new IllegalStateException("Could not write copy of " + csvFilePath, exception);
         }
     }
 
@@ -208,7 +190,8 @@ public final class StorageEngine {
         try {
             return readRows(dataDirectory.resolve(partition.path), catalog.schema);
         } catch (IOException exception) {
-            LOGGER.error("api=readPartition table={} partition={} failed", tableName, LogSanitizer.sanitize(partition.path));
+            LOGGER.error("api=readPartition table={} partition={} failed", tableName,
+                    LogSanitizer.sanitize(partition.path));
             throw new IllegalStateException("Could not read partition " + partition.path, exception);
         }
     }
@@ -307,6 +290,143 @@ public final class StorageEngine {
         } catch (IOException exception) {
             cleanupTemporaryFiles(List.of(temporary));
             throw new IllegalStateException("Could not persist catalog for " + catalog.table, exception);
+        }
+    }
+
+    /**
+     * Streams a CSV file line by line into partition files. Rows are buffered
+     * until the buffer holds {@code maxRowsPerPartition} rows, then written as one
+     * partition; the remaining rows form the last partition.
+     *
+     * @param tableName      table being loaded
+     * @param csvFilePath    path of the CSV file to read
+     * @param catalog        catalog of the table, providing its schema
+     * @param tableDirectory directory receiving the partition files
+     * @return written partitions in partition-number order; empty for an empty file
+     * @throws IllegalArgumentException if the file cannot be read or a line is
+     *                                  malformed
+     * @throws IllegalStateException    if a partition file cannot be written
+     */
+    private List<Partition> streamCsvIntoPartitions(String tableName, String csvFilePath, Catalog catalog,
+            Path tableDirectory) {
+        List<Partition> partitions = new ArrayList<>();
+        List<Object[]> partitionRows = new ArrayList<>();
+
+        try (BufferedReader reader = Files.newBufferedReader(Path.of(csvFilePath), StandardCharsets.UTF_8)) {
+            String line;
+            int lineNumber = 0;
+            while ((line = reader.readLine()) != null) {
+                lineNumber++;
+                partitionRows.add(parseCsvLine(line, csvFilePath, lineNumber, catalog.schema));
+                if (partitionRows.size() == maxRowsPerPartition) {
+                    partitions.add(writePartitionFile(tableName, tableDirectory, partitions.size(), partitionRows,
+                            catalog.schema));
+                    partitionRows.clear();
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalArgumentException("Could not read " + csvFilePath, exception);
+        }
+
+        if (!partitionRows.isEmpty()) {
+            partitions.add(writePartitionFile(tableName, tableDirectory, partitions.size(), partitionRows,
+                    catalog.schema));
+        }
+        return partitions;
+    }
+
+    /**
+     * Writes one buffered partition to {@code partition-<n>.dat} via a temporary
+     * file and an atomic move, then computes and logs its min/max statistics.
+     *
+     * @param tableName       table owning the partition
+     * @param tableDirectory  directory receiving the partition file
+     * @param partitionNumber zero-based partition number
+     * @param rows            non-empty rows of this partition
+     * @param schema          table schema, in column order
+     * @return catalog entry describing the written partition
+     * @throws IllegalStateException if the partition file cannot be written
+     */
+    private Partition writePartitionFile(String tableName, Path tableDirectory, int partitionNumber,
+            List<Object[]> rows, List<Column> schema) {
+        Path finalPath = tableDirectory.resolve("partition-%d.dat".formatted(partitionNumber));
+        Path temporaryPath = finalPath.resolveSibling(finalPath.getFileName() + ".tmp-" + UUID.randomUUID());
+
+        try {
+            Files.createDirectories(tableDirectory);
+            writePartition(temporaryPath, rows, schema);
+            moveAtomically(temporaryPath, finalPath);
+        } catch (IOException exception) {
+            throw new IllegalStateException(
+                    "Could not write partition " + partitionNumber + " of table " + tableName, exception);
+        }
+
+        return new Partition(dataDirectory.relativize(finalPath).toString(), rows.size(),
+                computeStatistics(rows, schema, tableName, partitionNumber));
+    }
+
+    /**
+     * Persists the table's catalog with its new partitions and caches it. This is
+     * the commit point of a copy: before it, the partitions are invisible.
+     *
+     * @param catalog    current catalog of the table
+     * @param partitions partitions written by the copy
+     * @throws IllegalStateException if the catalog cannot be persisted
+     */
+    private void commitCatalog(Catalog catalog, List<Partition> partitions) {
+        Catalog updated = new Catalog(catalog.table, catalog.schema, partitions);
+        writeCatalog(updated);
+        catalogs.put(catalog.table, updated);
+    }
+
+    /**
+     * Logs the summary line of a successful copy.
+     *
+     * @param tableName   loaded table
+     * @param csvFilePath path of the loaded CSV file
+     * @param partitions  partitions written by the copy
+     * @param started     {@link System#nanoTime()} value when the copy started
+     */
+    private static void logCopySummary(String tableName, String csvFilePath, List<Partition> partitions,
+            long started) {
+        long rowCount = partitions.stream().mapToLong(partition -> partition.rowCount).sum();
+        LOGGER.debug("table=%s file=%s rows=%d partitions=%d durationMs=%d".formatted(
+                tableName, LogSanitizer.sanitize(Path.of(csvFilePath).getFileName()), rowCount,
+                partitions.size(), elapsedMillis(started)));
+    }
+
+    /**
+     * Deletes the partition files of a copy that did not commit. A cleanup failure
+     * is logged and not rethrown, so the exception that failed the copy is the one
+     * that reaches the caller; the leftover files are unreferenced by the catalog.
+     *
+     * @param tableDirectory directory holding the uncommitted partition files
+     */
+    private static void discardFailedCopy(Path tableDirectory) {
+        try {
+            deleteDirectoryRecursively(tableDirectory);
+        } catch (IllegalStateException exception) {
+            LOGGER.error("api=copyFile cleanup failed error={}", LogSanitizer.sanitize(exception.getMessage()));
+        }
+    }
+
+    /**
+     * Deletes a directory and everything below it. A missing directory is a no-op.
+     *
+     * @param directory directory to delete
+     * @throws IllegalStateException if a file or directory cannot be deleted
+     */
+    private static void deleteDirectoryRecursively(Path directory) {
+        if (!Files.exists(directory)) {
+            return;
+        }
+
+        try (Stream<Path> paths = Files.walk(directory)) {
+            for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not delete " + directory, exception);
         }
     }
 
@@ -490,11 +610,19 @@ public final class StorageEngine {
         }
     }
 
+    /**
+     * Deletes temporary files left by a failed write. A failed delete is logged and
+     * not rethrown, so the original write failure reaches the caller.
+     *
+     * @param paths temporary files to delete; missing files are ignored
+     */
     private static void cleanupTemporaryFiles(List<Path> paths) {
         for (Path path : paths) {
             try {
                 Files.deleteIfExists(path);
-            } catch (IOException ignored) {
+            } catch (IOException exception) {
+                LOGGER.error("api=cleanupTemporaryFiles file={} error={}", LogSanitizer.sanitize(path),
+                        LogSanitizer.sanitize(exception.getMessage()));
             }
         }
     }
