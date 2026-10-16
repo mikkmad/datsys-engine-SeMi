@@ -2,6 +2,7 @@ package datasys.semi;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static datasys.semi.UtilsTest.copyResource;
@@ -11,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.IntStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -255,6 +257,61 @@ class StorageEngineIT {
         for (int i = 0; i < rowsA.size(); i++) {
             assertArrayEquals(rowsA.get(i), rowsB.get(i));
         }
+    }
+
+    // Streaming COPY: a malformed line found after full partitions were already
+    // written fails the whole copy and leaves no partition files or catalog entries.
+    @Test
+    void malformedLineAfterFullPartitionsLeavesNoPartitionsBehind(@TempDir Path directory) throws IOException {
+        Path csv = directory.resolve("broken.csv");
+        Files.writeString(csv, "Aarhus,1,1.0\nOdense,2,2.0\nVejle,3,3.0\nHerning,4,4.0\nAalborg,oops,5.0");
+        StorageEngine engine = new StorageEngine(directory, 2);
+        engine.createTable("trips", SCHEMA);
+
+        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                () -> engine.copyFile("trips", csv.toString()));
+
+        assertTrue(failure.getMessage().contains("broken.csv: line 5"));
+        assertTrue(engine.partitions("trips").isEmpty());
+        assertFalse(Files.exists(directory.resolve("data").resolve("trips")));
+        assertTrue(new StorageEngine(directory, 2).partitions("trips").isEmpty());
+    }
+
+    // Streaming COPY: a failed copy leaves the table empty, so a later valid copy
+    // into the same table succeeds.
+    @Test
+    void failedCopyCanBeRetriedWithValidFile(@TempDir Path directory) throws IOException {
+        Path broken = directory.resolve("broken.csv");
+        Files.writeString(broken, "Aarhus,1,1.0\nOdense,2,2.0\nVejle,x,3.0");
+        Path csv = copyResource(directory, "trips.csv");
+        StorageEngine engine = new StorageEngine(directory, 2);
+        engine.createTable("trips", SCHEMA);
+
+        assertThrows(IllegalArgumentException.class, () -> engine.copyFile("trips", broken.toString()));
+        engine.copyFile("trips", csv.toString());
+
+        assertEquals(4, engine.partitions("trips").size());
+        assertEquals(8, new Executor(engine).executeQuery("SELECT * FROM trips;").size());
+    }
+
+    // Streaming COPY: rows are flushed in partitions of at most maxRowsPerPartition,
+    // with the remainder in a final, smaller partition.
+    @Test
+    void copyStreamsIntoPartitionsOfAtMostMaxRows(@TempDir Path directory) throws IOException {
+        Path csv = directory.resolve("eleven.csv");
+        Files.writeString(csv, String.join("\n", IntStream.rangeClosed(1, 11)
+                .mapToObj(row -> "City" + row + "," + row + "," + row + ".5")
+                .toList()));
+        StorageEngine engine = new StorageEngine(directory, 4);
+        engine.createTable("trips", SCHEMA);
+
+        engine.copyFile("trips", csv.toString());
+
+        List<Integer> rowCounts = engine.partitions("trips").stream()
+                .map(partition -> partition.rowCount)
+                .toList();
+        assertEquals(List.of(4, 4, 3), rowCounts);
+        assertEquals(11, new Executor(engine).executeQuery("SELECT * FROM trips;").size());
     }
 
 }
