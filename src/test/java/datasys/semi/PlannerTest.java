@@ -6,9 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
+
+import org.slf4j.MDC;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -150,5 +155,48 @@ class PlannerTest {
 
         SelectStatement unknownColumn = new SelectStatement("trips", Optional.empty(), Optional.of(new Predicate("nonexistent_col", Comparison.EQUALS, "val")));
         assertThrows(IllegalArgumentException.class, () -> planner.plan(unknownColumn));
+    }
+
+    /**
+     * Verifies that planning an unfiltered query logs READ decision with noPredicate for each partition.
+     */
+    @Test
+    void planWithoutPredicateLogsNoPredicateDecisionLines() throws IOException {
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        try {
+            planner.plan(new SelectStatement("trips", Optional.empty(), Optional.empty()));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        assertTrue(logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .anyMatch(line -> line.contains("table=trips partition=0 decision=READ reason=noPredicate")));
+    }
+
+    /**
+     * Verifies that partitions with missing column statistics are retained and logged with missingStats.
+     */
+    @Test
+    void prunePartitionsKeepsPartitionAndLogsWhenStatisticsAreMissing() throws IOException {
+        engine.partitions("trips").get(0).statistics.remove("distance");
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        SelectStatement statement = new SelectStatement(
+                "trips", Optional.empty(), Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)));
+        try {
+            Operator plan = planner.plan(statement);
+            ScanOperator scan = (ScanOperator) ((FilterOperator) plan).child();
+            assertTrue(scan.partitionNumbers().contains(0));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        assertTrue(logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .anyMatch(line -> line.contains("table=trips partition=0 decision=READ reason=missingStats")));
     }
 }

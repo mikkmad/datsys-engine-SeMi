@@ -12,6 +12,7 @@ import org.slf4j.MDC;
 
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.executor.Executor;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Main command-line front door for the analytical storage engine.
@@ -69,12 +70,12 @@ public final class Engine {
             Executor executor = new Executor(engine, out);
             dispatchArguments(args, executor);
         } catch (Exception exception) {
-            LOGGER.error("Engine execution failed: {}", exception.getMessage());
+            LOGGER.error("Engine execution failed: {}", LogSanitizer.sanitize(exception.getMessage()));
             err.println("Error: " + exception.getMessage());
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
             LOGGER.debug("engine stopped");
-            MDC.clear();
+            MDC.remove("sessionId");
         }
     }
 

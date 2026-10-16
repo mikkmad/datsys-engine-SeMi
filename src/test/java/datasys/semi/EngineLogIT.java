@@ -54,6 +54,13 @@ class EngineLogIT {
 
         assertTrue(hasErrorForFailingStatement,
                 "expected an ERROR line for statement " + FAILING_STATEMENT_NUMBER + " in session " + sessionId);
+
+        LogLine statementError = parseSessionLines(rawLogLines, sessionId).stream()
+                .filter(line -> line.logLevel().equals("ERROR") && line.statementNumber() == FAILING_STATEMENT_NUMBER)
+                .findFirst()
+                .orElseThrow();
+        assertEquals("statement_failed operation=SELECT reason=unknown table: " + missingTableName,
+                statementError.logMessage());
     }
 
     /**
