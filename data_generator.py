@@ -12,7 +12,12 @@ fake = Faker()
 Faker.seed(42)  # Seed for reproducibility
 
 # Corresponds to roughly 1mb, 10mb, 100mb, and 1gb of data respectively
-file_size_targets = [40_000, 400_000, 4_000_000, 40_000_000]
+file_size_targets = {
+    40_000: "1mb",
+    400_000: "10mb",
+    4_000_000: "100mb",
+    40_000_000: "1000mb"
+}
 
 # If directory doesn't exist, create it
 logging.debug("Creating directory 'generated_data' if it doesn't exist...")
@@ -25,9 +30,9 @@ cities = [fake.city() for _ in range(15_000)]
 logging.debug("List of cities generated.")
 
 # Generates a CSV file with random `n` number of lines of data for cities, distances, and prices
-def generate_data(n):
-    with open(f"generated_data/data_{n}.csv", mode='w', newline='') as file:
-        logging.debug(f"Generating data for data_{n}.csv...")
+def generate_data(n, size):
+    with open(f"generated_data/data_{size}.csv", mode='w', newline='') as file:
+        logging.debug(f"Generating data for data_{size}.csv...")
 
         # remove default newline character to avoid extra blank lines in
         writer = csv.writer(file, lineterminator='')
@@ -46,4 +51,4 @@ def generate_data(n):
 
 # Generate data for each target size
 for target_size in file_size_targets:
-    generate_data(target_size)
+    generate_data(target_size, file_size_targets.get(target_size))
