@@ -38,11 +38,23 @@ mean_and_stddev() {
         }'
 }
 
+# Resolves the generated CSV file path for a given row count (e.g. 40000 -> data_1mb.csv).
+data_file() {
+    local rows="$1"
+    local label_file="$ROOT/generated_data/data_$((rows / 40000))mb.csv"
+    if [ -f "$label_file" ]; then
+        echo "$label_file"
+    else
+        echo "$ROOT/generated_data/data_$rows.csv"
+    fi
+}
+
 mkdir -p "$(dirname "$OUT")"
 echo "rows,size_mb,copy_ms,copy_std_ms,select_ms,select_std_ms" > "$OUT"
 
 for rows in $SIZES; do
-    bytes="$(wc -c < "$ROOT/generated_data/data_$rows.csv" | tr -d ' ')"
+    csv="$(data_file "$rows")"
+    bytes="$(wc -c < "$csv" | tr -d ' ')"
     size_mb="$(awk -v bytes="$bytes" 'BEGIN { printf "%.2f", bytes / 1000000 }')"
     copy="$(measured_durations COPY "$rows" | mean_and_stddev)" || exit 1
     select="$(measured_durations SELECT "$rows" | mean_and_stddev)" || exit 1

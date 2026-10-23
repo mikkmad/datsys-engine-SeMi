@@ -15,5 +15,8 @@ venv/
 
 # Data Generated
 generated_data/
-# Engine data directory used by run-experiments.sh
+# Engine data and log directories used by run-experiments.sh
 experiment-data/
+experiment-run/
+experiment-logs/
+experiment-results/

@@ -37,10 +37,21 @@ run_engine() {
     } > "$LOG_DIR/$name.log"
 }
 
+# Resolves the generated CSV file path for a given row count (e.g. 40000 -> data_1mb.csv).
+data_file() {
+    local rows="$1"
+    local label_file="$ROOT/generated_data/data_$((rows / 40000))mb.csv"
+    if [ -f "$label_file" ]; then
+        echo "$label_file"
+    else
+        echo "$ROOT/generated_data/data_$rows.csv"
+    fi
+}
+
 mkdir -p "$LOG_DIR" "$RUN_DIR"
 
 for rows in $SIZES; do
-    csv="$ROOT/generated_data/data_${rows}.csv"
+    csv="$(data_file "$rows")"
 
     # COPY: wipe the data directory before every run, since a table only takes one COPY.
     for run in $(seq 0 "$REPS"); do
