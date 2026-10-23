@@ -8,9 +8,10 @@ import os
 logging.basicConfig(level=logging.DEBUG)
 
 # Faker instance & seeds for reproducibility
+SEED = 42
 fake = Faker()
-Faker.seed(42)
-random.seed(42)
+Faker.seed(SEED)
+random.seed(SEED)
 
 # Corresponds to roughly 1mb, 10mb, 100mb, and 1gb of data respectively
 file_size_targets = {
