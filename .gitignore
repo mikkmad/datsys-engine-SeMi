@@ -8,3 +8,15 @@ ours.csv
 theirs.csv
 
 dependency-reduced-pom.xml
+
+# Python virtual environments
+.venv/
+venv/
+
+# Data Generated
+generated_data/
+# Engine data and log directories used by run-experiments.sh
+experiment-data/
+experiment-run/
+experiment-logs/
+experiment-results/
