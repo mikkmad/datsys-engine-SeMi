@@ -17,14 +17,14 @@
 
 **Choice**: A statement pins a reference to the table's current immutable `Catalog` version at statement start, before binding and planning, and passes that snapshot through planning and execution without ever re-reading metadata from `StorageEngine`.
 
-**Reason**: `Catalog` instances and partition files are immutable. Therefore, holding a reference to the `Catalog` version guarantees that the table state seen by a running `SELECT`, `DELETE`, or `COPY` cannot change mid-statement even if a newer version is committed concurrently. We went with 10 to provide a "buffer" between currently used versions and unused, old versions, such that it is only in rare cases with extremely slow statement executions, that an old version is still in use.
+**Reason**: `Catalog` instances and partition files are immutable. Therefore, holding a reference to the `Catalog` version guarantees that the table state seen by a running `SELECT`, `DELETE`, or `COPY` cannot change mid-statement even if a newer version is committed concurrently.
 
 # 4. Retention
 > How many versions back does the engine keep? A version must not be dropped while a `SELECT` or a `DELETE` still reads it, so how does the engine know that no statement still uses it? Reference counting, a list of running statements, and a fixed number of retained versions are all defensible. Write down which one you pick, and what a statement sees when it asks for a version that is gone.
 
 **Choice**: The engine keeps a fixed number of versions (10), and tracks the number of running readers for each version. Should a reader attempt to read a version that has been dropped, it will throw `IllegalStateException` with a message indicating that the version is no longer available.
 
-**Reason**: Keeping a fixed number of versions allows the engine to reclaim disk space while still supporting concurrent readers. Reference counting ensures that a version is not dropped while actively in use, and throwing `IllegalStateException` over `IllegalArgumentException` makes it clear that an illegal state was reached by accessing a version that no longer exists.
+**Reason**: Keeping a fixed number of versions allows the engine to reclaim disk space while still supporting concurrent readers. Reference counting ensures that a version is not dropped while actively in use, and throwing `IllegalStateException` over `IllegalArgumentException` makes it clear that an illegal state was reached by accessing a version that no longer exists. We went with 10 to provide a "buffer" between currently used versions and unused, old versions, such that it is only in rare cases with extremely slow statement executions, that an old version is still in use.
 
 # 5. The Rewrite Set
 > `DELETE` must rewrite exactly the partitions that may contain matches, which is the complement of week 4's pruning decision. Where does the shared helper live so that the planner and `DELETE` decide from the same code? And what happens to a partition that may contain a match but turns out to contain none: do you write an identical copy, or carry the original over?
