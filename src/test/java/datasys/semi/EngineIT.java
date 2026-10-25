@@ -150,4 +150,34 @@ class EngineIT {
         String errString = capturedErr.toString(StandardCharsets.UTF_8);
         assertTrue(errString.contains("Error:"));
     }
+
+    @Test
+    void repeatedCopyScriptReturnsRowsFromBothFiles(@TempDir Path tempDir) throws IOException {
+        Path csvPath = copyResource(tempDir, "trips.csv");
+        Path secondCsvPath = tempDir.resolve("extra.csv");
+        Files.writeString(secondCsvPath, "Roskilde,250,399.0\n", StandardCharsets.UTF_8);
+
+        Path dataDir = tempDir.resolve("data");
+        System.setProperty("semi.data.dir", dataDir.toString());
+
+        Path scriptPath = tempDir.resolve("repeated_copy.sql");
+        String script = """
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM '%s';
+                COPY trips FROM '%s';
+                SELECT * FROM trips WHERE distance > 200;
+                """.formatted(
+                csvPath.toString().replace("\\", "/"),
+                secondCsvPath.toString().replace("\\", "/"));
+        Files.writeString(scriptPath, script, StandardCharsets.UTF_8);
+
+        Engine.main(new String[] { "-f", scriptPath.toString() });
+
+        List<String> expectedLines = List.of(
+                "Aalborg,210,340.5",
+                "Esbjerg,299,450.25",
+                "Roskilde,250,399.0");
+        String expectedCsv = String.join(System.lineSeparator(), expectedLines) + System.lineSeparator();
+        assertArrayEquals(expectedCsv.getBytes(StandardCharsets.UTF_8), capturedOut.toByteArray());
+    }
 }
