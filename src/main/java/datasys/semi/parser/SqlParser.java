@@ -1,13 +1,11 @@
 package datasys.semi.parser;
 
 import java.util.List;
-import java.util.UUID;
 
 import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.MDC;
 
 import datasys.semi.models.Statement;
 import datasys.semi.sql.SqlLexer;

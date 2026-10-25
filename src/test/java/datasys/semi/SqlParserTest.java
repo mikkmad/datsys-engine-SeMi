@@ -3,7 +3,6 @@ package datasys.semi;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import datasys.semi.models.*;
 import datasys.semi.schema.*;
@@ -48,13 +47,15 @@ class SqlParserTest {
                 List<Statement> selectWithWhereResults = parser.parse("SELECT * FROM trips WHERE distance > 100;");
                 assertEquals(1, selectWithWhereResults.size());
                 SelectStatement expectedSelectWithWhere = new SelectStatement(
-                                "trips", Optional.empty(), Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)));
+                                "trips", Optional.empty(),
+                                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)));
                 assertEquals(expectedSelectWithWhere, selectWithWhereResults.getFirst());
 
                 // 1.4 SELECT without WHERE
                 List<Statement> selectNoWhereResults = parser.parse("SELECT * FROM trips;");
                 assertEquals(1, selectNoWhereResults.size());
-                SelectStatement expectedSelectNoWhere = new SelectStatement("trips", Optional.empty(), Optional.empty());
+                SelectStatement expectedSelectNoWhere = new SelectStatement("trips", Optional.empty(),
+                                Optional.empty());
                 assertEquals(expectedSelectNoWhere, selectNoWhereResults.getFirst());
 
                 // 1.5 Multi-statement script
@@ -209,7 +210,8 @@ class SqlParserTest {
         void doubleOverflowThrowsSqlParseExceptionAtTokenPosition() {
                 String hugeDigits = "1" + "0".repeat(309);
                 SqlParseException tooLarge = assertThrows(SqlParseException.class,
-                                () -> parser.parse("-- comment\nSELECT * FROM trips WHERE price > " + hugeDigits + ".0;"));
+                                () -> parser.parse(
+                                                "-- comment\nSELECT * FROM trips WHERE price > " + hugeDigits + ".0;"));
                 assertEquals(2, tooLarge.line());
                 assertEquals(34, tooLarge.column());
 
@@ -222,7 +224,8 @@ class SqlParserTest {
         @Test
         void overflowInLaterStatementReportsItsOwnPosition() {
                 SqlParseException exception = assertThrows(SqlParseException.class,
-                                () -> parser.parse("SELECT * FROM trips;\nSELECT * FROM trips WHERE distance = 99999999999999999999;"));
+                                () -> parser.parse(
+                                                "SELECT * FROM trips;\nSELECT * FROM trips WHERE distance = 99999999999999999999;"));
                 assertEquals(2, exception.line());
                 assertEquals(37, exception.column());
         }
@@ -232,7 +235,8 @@ class SqlParserTest {
                 assertEquals(Long.MAX_VALUE, parseConstant("distance = 9223372036854775807"));
                 assertEquals(Long.MIN_VALUE, parseConstant("distance = -9223372036854775808"));
                 assertEquals(Double.MAX_VALUE,
-                                parseConstant("price = " + new java.math.BigDecimal(Double.MAX_VALUE).toPlainString() + ".0"));
+                                parseConstant("price = " + new java.math.BigDecimal(Double.MAX_VALUE).toPlainString()
+                                                + ".0"));
                 assertEquals(Double.MIN_VALUE,
                                 parseConstant("price = " + new java.math.BigDecimal(Double.MIN_VALUE).toPlainString()));
         }
