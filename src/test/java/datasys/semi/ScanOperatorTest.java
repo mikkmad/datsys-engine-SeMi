@@ -35,7 +35,7 @@ class ScanOperatorTest {
         StorageEngine engine = loadGoldenTable(directory);
 
         // Handed partitions 1 and 3 of 4: rows 3-4 and 7-8 of trips_sorted.csv.
-        Operator scan = new ScanOperator(engine, "trips", List.of(1, 3));
+        Operator scan = new ScanOperator(engine, engine.snapshot("trips"), List.of(1, 3));
 
         Object[][] expected = {
                 { "Copenhagen", 88L, 99.99 },
@@ -55,7 +55,7 @@ class ScanOperatorTest {
     void emptyPartitionListReturnsNoRows(@TempDir Path directory) throws IOException {
         StorageEngine engine = loadGoldenTable(directory);
 
-        Operator scan = new ScanOperator(engine, "trips", List.of());
+        Operator scan = new ScanOperator(engine, engine.snapshot("trips"), List.of());
         scan.open();
         assertNull(scan.next());
         scan.close();
@@ -73,7 +73,7 @@ class ScanOperatorTest {
         Path csv = UtilsTest.copyResource(directory, "trips_sorted.csv");
         StorageEngine engine = new StorageEngine(directory, 2);
         engine.createTable("trips", SCHEMA);
-        engine.copyFile("trips", csv.toString());
+        engine.copyFile(engine.snapshot("trips"), csv.toString());
         return engine;
     }
 
