@@ -149,11 +149,15 @@ public final class Executor {
         }
 
         MDC.put("statementNumber", "1");
+        long started = System.nanoTime();
         try {
             Catalog snapshot = engine.snapshot(select.tableName());
             binder.bind(select, snapshot);
             Operator plan = planner.plan(select, snapshot);
-            return drainToList(plan);
+            ScanStats stats = planner.lastScanStats();
+            List<Object[]> rows = drainToList(plan);
+            logSelectSummary(select.tableName(), rows.size(), stats, started);
+            return rows;
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
@@ -239,9 +243,21 @@ public final class Executor {
         Operator plan = planner.plan(statement, snapshot);
         ScanStats stats = planner.lastScanStats();
         long rowsOut = drainToOutput(plan);
+        logSelectSummary(statement.tableName(), rowsOut, stats, started);
+    }
+
+    /**
+     * Logs the summary line of a completed {@code SELECT} statement.
+     *
+     * @param tableName target table name
+     * @param rowsOut   number of rows emitted by the query
+     * @param stats     scan statistics from the planner
+     * @param started   nano timestamp when execution started
+     */
+    private static void logSelectSummary(String tableName, long rowsOut, ScanStats stats, long started) {
         LOGGER.debug(
                 "statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                statement.tableName(), rowsOut, stats.partitionsRead(), stats.partitionsPruned(),
+                tableName, rowsOut, stats.partitionsRead(), stats.partitionsPruned(),
                 stats.version(), elapsedMillis(started));
     }
 
