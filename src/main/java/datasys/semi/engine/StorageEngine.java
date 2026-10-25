@@ -11,6 +11,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -41,7 +42,8 @@ import org.slf4j.MDC;
  * <p>
  * Each table version is persisted as an immutable JSON file
  * {@code catalogs/
- * <table>
+ * 
+<table>
  * -v<version>.json} and swapped into the in-memory
  * catalog map atomically after the disk rename succeeds. Readers pin a
  * {@link Catalog} snapshot at statement start and never re-read live metadata.
@@ -229,11 +231,19 @@ public final class StorageEngine {
             throw new IllegalArgumentException("next catalog must not be null");
         }
 
-        catalogs.compute(next.table(), (tableName, current) -> {
-            validateCommitBase(tableName, base, current);
-            writeCatalog(next);
-            return next;
-        });
+        Path target = catalogsDirectory.resolve(catalogFileName(next.table(), next.version()));
+        Path temporary = target.resolveSibling(target.getFileName() + ".tmp-" + UUID.randomUUID());
+
+        try {
+            writeTemporaryCatalog(next, temporary);
+            catalogs.compute(next.table(), (tableName, current) -> {
+                validateCommitBase(tableName, base, current);
+                publishCatalogAtomically(next, temporary, target);
+                return next;
+            });
+        } finally {
+            cleanupTemporaryFiles(List.of(temporary));
+        }
 
         pruneOldCatalogVersions(next.table());
     }
@@ -398,24 +408,35 @@ public final class StorageEngine {
     }
 
     /**
-     * Writes a catalog version to {@code catalogs/
-     * <table>
-     * -v<version>.json} via a
-     * temporary file and an atomic rename.
+     * Serializes {@code catalog} to a temporary file before entering the catalog
+     * map's critical section.
      *
-     * @param catalog catalog version to persist
-     * @throws IllegalStateException if the file cannot be written or moved
-     *                               atomically
+     * @param catalog   catalog version to serialize
+     * @param temporary temporary file path to write
+     * @throws IllegalStateException if the temporary file cannot be written
      */
-    private void writeCatalog(Catalog catalog) {
-        Path target = catalogsDirectory.resolve(catalogFileName(catalog.table(), catalog.version()));
-        Path temporary = target.resolveSibling(target.getFileName() + ".tmp-" + UUID.randomUUID());
-
+    private void writeTemporaryCatalog(Catalog catalog, Path temporary) {
         try {
             objectMapper.writeValue(temporary.toFile(), catalog);
+        } catch (IOException exception) {
+            LOGGER.error("api=writeCatalog table={} version={} error={}", catalog.table(), catalog.version(),
+                    LogSanitizer.sanitize(exception.getMessage()));
+            throw new IllegalStateException("Could not persist catalog for " + catalog.table(), exception);
+        }
+    }
+
+    /**
+     * Atomically renames a pre-written temporary catalog file into {@code target}.
+     *
+     * @param catalog   catalog version being published
+     * @param temporary pre-written temporary file path
+     * @param target    final versioned catalog file path
+     * @throws IllegalStateException if the atomic rename fails
+     */
+    private static void publishCatalogAtomically(Catalog catalog, Path temporary, Path target) {
+        try {
             moveAtomically(temporary, target);
         } catch (IOException exception) {
-            cleanupTemporaryFiles(List.of(temporary));
             LOGGER.error("api=writeCatalog table={} version={} error={}", catalog.table(), catalog.version(),
                     LogSanitizer.sanitize(exception.getMessage()));
             throw new IllegalStateException("Could not persist catalog for " + catalog.table(), exception);
@@ -425,17 +446,17 @@ public final class StorageEngine {
     /**
      * Retains only the newest {@link #MAX_RETAINED_CATALOG_VERSIONS} catalog files
      * for {@code tableName} on disk, deleting older version files in ascending
-     * numerical version order.
+     * numerical version order. Failures are logged and not rethrown so post-commit
+     * housekeeping never rolls back an already committed catalog version.
      *
      * @param tableName table whose old catalog versions should be pruned
-     * @throws IllegalStateException if listing or deleting catalog files fails
      */
     private void pruneOldCatalogVersions(String tableName) {
         Pattern tablePattern = Pattern.compile("^" + Pattern.quote(tableName) + "-v(\\d+)\\.json$");
         List<VersionedFile> matches = new ArrayList<>();
 
-        try (Stream<Path> paths = Files.list(catalogsDirectory)) {
-            for (Path path : paths.toList()) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(catalogsDirectory)) {
+            for (Path path : stream) {
                 Matcher matcher = tablePattern.matcher(path.getFileName().toString());
                 if (matcher.matches()) {
                     matches.add(new VersionedFile(Long.parseLong(matcher.group(1)), path));
@@ -448,7 +469,6 @@ public final class StorageEngine {
         } catch (IOException exception) {
             LOGGER.error("api=pruneOldCatalogVersions table={} error={}", tableName,
                     LogSanitizer.sanitize(exception.getMessage()));
-            throw new IllegalStateException("Could not prune old catalog versions for " + tableName, exception);
         }
     }
 
@@ -521,11 +541,12 @@ public final class StorageEngine {
             moveAtomically(temporaryPath, finalPath);
             writtenFiles.add(finalPath);
         } catch (IOException exception) {
-            cleanupTemporaryFiles(List.of(temporaryPath));
             LOGGER.error("api=writePartitionFile table={} partition={} error={}", tableName, partitionNumber,
                     LogSanitizer.sanitize(exception.getMessage()));
             throw new IllegalStateException(
                     "Could not write partition " + partitionNumber + " of table " + tableName, exception);
+        } finally {
+            cleanupTemporaryFiles(List.of(temporaryPath));
         }
 
         return new Partition(dataDirectory.relativize(finalPath).toString(), rows.size(),
@@ -552,7 +573,8 @@ public final class StorageEngine {
     /**
      * Deletes only the partition files written by a failed {@code COPY}, and
      * removes {@code data/
-     * <table>
+     * 
+    <table>
      * /} only if it is now empty.
      *
      * @param tableDirectory directory holding the table's partition files
@@ -868,7 +890,8 @@ public final class StorageEngine {
 
     /**
      * Formats the versioned catalog filename {@code 
-     * <table>
+     * 
+    <table>
      * -v<version>.json}.
      *
      * @param tableName table name
