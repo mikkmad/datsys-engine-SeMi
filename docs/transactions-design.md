@@ -17,7 +17,7 @@
 
 **Choice**: A statement pins a reference to the table's current immutable `Catalog` version at statement start, before binding and planning, and passes that snapshot through planning and execution without ever re-reading metadata from `StorageEngine`.
 
-**Reason**: `Catalog` instances and partition files are immutable. Therefore, holding a reference to the `Catalog` version guarantees that the table state seen by a running `SELECT`, `DELETE`, or `COPY` cannot change mid-statement even if a newer version is committed concurrently.
+**Reason**: `Catalog` instances and partition files are immutable. Therefore, holding a reference to the `Catalog` version guarantees that the table state seen by a running `SELECT`, `DELETE`, or `COPY` cannot change mid-statement even if a newer version is committed concurrently. We went with 10 to provide a "buffer" between currently used versions and unused, old versions, such that it is only in rare cases with extremely slow statement executions, that an old version is still in use.
 
 # 4. Retention
 > How many versions back does the engine keep? A version must not be dropped while a `SELECT` or a `DELETE` still reads it, so how does the engine know that no statement still uses it? Reference counting, a list of running statements, and a fixed number of retained versions are all defensible. Write down which one you pick, and what a statement sees when it asks for a version that is gone.
