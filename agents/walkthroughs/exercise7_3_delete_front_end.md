@@ -2,7 +2,7 @@
 
 ## 1. Summary of Work Accomplished
 
-Implemented the complete front-end pipeline for the `DELETE` statement per [`exercise_descriptions/Exercise7.md` §3](file:///workspaces/SeMi/exercise_descriptions/Exercise7.md#L35-L53), [`agents/implementation_plans/exercise7_3_delete_front_end.md`](file:///workspaces/SeMi/agents/implementation_plans/exercise7_3_delete_front_end.md), and feedback in [`agents/feedback/exercise7_3_delete_front_end_feedback.md`](file:///workspaces/SeMi/agents/feedback/exercise7_3_delete_front_end_feedback.md).
+Implemented the complete front-end pipeline for the `DELETE` statement per [`exercise_descriptions/Exercise7.md` §3](file:///workspaces/SeMi/exercise_descriptions/Exercise7.md#L35-L53) and [`agents/implementation_plans/exercise7_3_delete_front_end.md`](file:///workspaces/SeMi/agents/implementation_plans/exercise7_3_delete_front_end.md), incorporating review feedback.
 
 - **Grammar & Lexer** ([`Sql.g4`](file:///workspaces/SeMi/src/main/antlr4/datasys/semi/sql/Sql.g4)): Added `delete : DELETE FROM IDENTIFIER (WHERE predicate)? ;` to `statement`, and declared `DELETE : 'DELETE' ;` in the lexer before `IDENTIFIER`.
 - **AST Representation** ([`DeleteStatement.java`](file:///workspaces/SeMi/src/main/java/datasys/semi/models/DeleteStatement.java), [`Statement.java`](file:///workspaces/SeMi/src/main/java/datasys/semi/models/Statement.java)): Created immutable record `DeleteStatement(String tableName, Optional<Predicate> where)` with argument validation, and permitted it in the sealed `Statement` interface.
