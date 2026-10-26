@@ -112,7 +112,14 @@ Before implementing copy-on-write partition rewriting in §4, the SQL front end 
   ```
 - In `resolveOperation(Statement)` (L199–L205), add `case DeleteStatement _ -> "DELETE";`.
 - Add `private void executeDelete(DeleteStatement statement, Catalog snapshot, long started)` which emits nothing to `output` and throws `new UnsupportedOperationException("DELETE execution is not implemented yet")` as a clean front-end boundary stub to be replaced in Exercise 7 §4 (`execute(List<Statement>)` catches this `RuntimeException`, logs `statement_failed operation=DELETE reason=...` at `ERROR` with active `statementNumber`, and rethrows).
-- Note: `executeQuery(String)` (L147) already requires a single `SelectStatement` and rejects `DELETE` with `IllegalArgumentException("expected exactly one SELECT statement")`.
+- Note: `executeQuery(String)` requires a single `SelectStatement` and rejects `DELETE` with `IllegalArgumentException("expected exactly one SELECT statement")`; after review feedback this check lives in `parseSingleSelect` and logs at `ERROR` (see §4.8).
+
+### 4.8 Deviations Added After Review Feedback
+These changes go beyond the original plan and are covered by the walkthrough:
+- `Binder.fail` and `SqlPrinter.fail` log sanitized `bind_failed` / `print_failed` lines at `ERROR`.
+- `SqlPrinter.formatString` rejects `'`, `\r`, and `\n` so `parse(print(s)).equals(s)` holds; this also applies to the `COPY` path (`printCopy`).
+- `Executor` handles `null` statements (`resolveOperation` returns `"UNKNOWN"`), extracts `parseSingleSelect`, and logs `ERROR` on programmatic entry-point failures.
+- `DeleteStatement`'s compact constructor logs `ERROR` before throwing.
 
 ### 4.7 Files Touched
 | File | Nature |
@@ -146,7 +153,8 @@ Before implementing copy-on-write partition rewriting in §4, the SQL front end 
 | `BinderIT` | `deleteTypeMismatchedConstantInWhereThrowsIllegalArgumentException` | `LONG` column with `String`/`Double`, `STRING` column with `Long`, and `DOUBLE` column with `String`/`Long` in `DELETE` each throw `IllegalArgumentException` (**Exercise 7 §5 Test 2**). |
 | `ExecutorTest` | `deleteBindingFailureLogsStatementFailedAndLeavesOutputEmpty` | Failing `DELETE` in a script throws `IllegalArgumentException`, logs `statement_failed operation=DELETE reason=...` at `ERROR` with active `statementNumber`, resets MDC to `"0"`, and writes 0 bytes to `output`. |
 | `ExecutorTest` | `executeQueryRejectsDeleteStatement` | `executor.executeQuery("DELETE FROM trips;")` throws `IllegalArgumentException`. |
-| `SqlCorpusIT` | *(existing 164 dynamic tests)* | All 77 good cases and 87 bad cases pass unchanged. |
+| `SqlCorpusIT` | *(existing 164 dynamic tests)* | All 77 good cases and 87 bad cases pass unchanged. The corpus contains no `DELETE` cases. |
+| *Manual* | DuckDB check of F6 | Run the printer's `DELETE` output (with/without `WHERE`; `STRING`, `LONG`, `DOUBLE` constants) in the DuckDB CLI and confirm it executes unchanged (Exercise 7 §3, last sentence). Record the result in the walkthrough. |
 
 ### 5.2 Commands
 ```bash
