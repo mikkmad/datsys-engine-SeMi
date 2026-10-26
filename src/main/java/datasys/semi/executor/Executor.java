@@ -13,6 +13,7 @@ import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
 import datasys.semi.models.CreateTableStatement;
+import datasys.semi.models.DeleteStatement;
 import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
@@ -68,9 +69,11 @@ public final class Executor {
      */
     public Executor(StorageEngine engine, PrintStream output) {
         if (engine == null) {
+            LOGGER.error("engine must not be null");
             throw new IllegalArgumentException("engine must not be null");
         }
         if (output == null) {
+            LOGGER.error("output must not be null");
             throw new IllegalArgumentException("output must not be null");
         }
 
@@ -89,10 +92,8 @@ public final class Executor {
      */
     public void execute(String sql) {
         if (sql == null) {
+            LOGGER.error("sql must not be null");
             throw new IllegalArgumentException("sql must not be null");
-        }
-        if (MDC.get("statementNumber") == null) {
-            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
 
         List<Statement> statements = parser.parse(sql);
@@ -108,6 +109,7 @@ public final class Executor {
      */
     public void execute(List<Statement> statements) {
         if (statements == null) {
+            LOGGER.error("statements must not be null");
             throw new IllegalArgumentException("statements must not be null");
         }
 
@@ -139,15 +141,7 @@ public final class Executor {
      *                                  statement
      */
     public List<Object[]> executeQuery(String sql) {
-        if (sql == null) {
-            throw new IllegalArgumentException("sql must not be null");
-        }
-
-        List<Statement> statements = parser.parse(sql);
-        if (statements.size() != 1 || !(statements.getFirst() instanceof SelectStatement select)) {
-            throw new IllegalArgumentException("expected exactly one SELECT statement");
-        }
-
+        SelectStatement select = parseSingleSelect(sql);
         MDC.put("statementNumber", "1");
         long started = System.nanoTime();
         try {
@@ -158,9 +152,35 @@ public final class Executor {
             List<Object[]> rows = drainToList(plan);
             logSelectSummary(select.tableName(), rows.size(), stats, started);
             return rows;
+        } catch (RuntimeException exception) {
+            LOGGER.error("statement_failed operation=SELECT reason={}",
+                    LogSanitizer.sanitize(exception.getMessage()));
+            throw exception;
         } finally {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
+    }
+
+    /**
+     * Parses a SQL string and verifies that it yields exactly one SELECT statement.
+     *
+     * @param sql SQL query string to parse
+     * @return the single parsed SelectStatement
+     * @throws IllegalArgumentException if {@code sql} is null or does not yield
+     *                                  exactly one SELECT statement
+     */
+    private SelectStatement parseSingleSelect(String sql) {
+        if (sql == null) {
+            LOGGER.error("sql must not be null");
+            throw new IllegalArgumentException("sql must not be null");
+        }
+
+        List<Statement> statements = parser.parse(sql);
+        if (statements.size() != 1 || !(statements.getFirst() instanceof SelectStatement select)) {
+            LOGGER.error("expected exactly one SELECT statement");
+            throw new IllegalArgumentException("expected exactly one SELECT statement");
+        }
+        return select;
     }
 
     /**
@@ -168,8 +188,13 @@ public final class Executor {
      * statement according to its type.
      *
      * @param statement the AST statement to execute
+     * @throws IllegalArgumentException if {@code statement} is null or fails
+     *                                  binding or execution
      */
     private void executeStatement(Statement statement) {
+        if (statement == null) {
+            throw new IllegalArgumentException("statement must not be null");
+        }
         long started = System.nanoTime();
 
         switch (statement) {
@@ -187,6 +212,11 @@ public final class Executor {
                 binder.bind(select, snapshot);
                 executeSelect(select, snapshot, started);
             }
+            case DeleteStatement delete -> {
+                Catalog snapshot = engine.snapshot(delete.tableName());
+                binder.bind(delete, snapshot);
+                executeDelete(delete, snapshot, started);
+            }
         }
     }
 
@@ -197,11 +227,28 @@ public final class Executor {
      * @return operation name string
      */
     private static String resolveOperation(Statement statement) {
+        if (statement == null) {
+            return "UNKNOWN";
+        }
         return switch (statement) {
             case CreateTableStatement _ -> "CREATE_TABLE";
             case CopyStatement _ -> "COPY";
             case SelectStatement _ -> "SELECT";
+            case DeleteStatement _ -> "DELETE";
         };
+    }
+
+    /**
+     * Executes a {@code DELETE} statement against the pinned snapshot.
+     * Stubbed with {@link UnsupportedOperationException} until Exercise 7 §4.
+     *
+     * @param statement DELETE statement
+     * @param snapshot  pinned catalog snapshot at statement start
+     * @param started   nano timestamp when execution started
+     * @throws UnsupportedOperationException always thrown in Exercise 7 §3
+     */
+    private void executeDelete(DeleteStatement statement, Catalog snapshot, long started) {
+        throw new UnsupportedOperationException("DELETE execution is not implemented yet");
     }
 
     /**
