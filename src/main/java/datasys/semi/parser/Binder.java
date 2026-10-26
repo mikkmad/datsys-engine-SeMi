@@ -2,23 +2,32 @@ package datasys.semi.parser;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
 import datasys.semi.models.CreateTableStatement;
+import datasys.semi.models.DeleteStatement;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Validates AST statements against a pinned {@link Catalog} snapshot or
  * table-creation schema rules.
  */
 public final class Binder {
+
+    // --- Constants ---
+    private static final Logger LOGGER = LoggerFactory.getLogger(Binder.class);
 
     // --- Collaborators ---
     private final StorageEngine engine;
@@ -32,7 +41,7 @@ public final class Binder {
      */
     public Binder(StorageEngine engine) {
         if (engine == null) {
-            throw new IllegalArgumentException("engine must not be null");
+            throw fail("engine must not be null");
         }
         this.engine = engine;
     }
@@ -47,13 +56,14 @@ public final class Binder {
      */
     public void bind(Statement statement) {
         if (statement == null) {
-            throw new IllegalArgumentException("statement must not be null");
+            throw fail("statement must not be null");
         }
 
         switch (statement) {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bind(copy, engine.snapshot(copy.tableName()));
             case SelectStatement select -> bind(select, engine.snapshot(select.tableName()));
+            case DeleteStatement delete -> bind(delete, engine.snapshot(delete.tableName()));
         }
     }
 
@@ -67,13 +77,14 @@ public final class Binder {
      */
     public void bind(Statement statement, Catalog snapshot) {
         if (statement == null) {
-            throw new IllegalArgumentException("statement must not be null");
+            throw fail("statement must not be null");
         }
 
         switch (statement) {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bindCopy(copy, snapshot);
             case SelectStatement select -> bindSelect(select, snapshot);
+            case DeleteStatement delete -> bindDelete(delete, snapshot);
         }
     }
 
@@ -87,16 +98,16 @@ public final class Binder {
     private void bindCreateTable(CreateTableStatement statement) {
         List<ColumnSpec> columns = statement.columns();
         if (columns == null || columns.isEmpty()) {
-            throw new IllegalArgumentException("column list must not be empty");
+            throw fail("column list must not be empty");
         }
 
         Set<String> seenColumnNames = new HashSet<>();
         for (ColumnSpec column : columns) {
             if (column == null || column.name() == null || column.name().isBlank()) {
-                throw new IllegalArgumentException("invalid column specification");
+                throw fail("invalid column specification");
             }
             if (!seenColumnNames.add(column.name())) {
-                throw new IllegalArgumentException("duplicate column name: " + column.name());
+                throw fail("duplicate column name: " + column.name());
             }
         }
     }
@@ -114,8 +125,8 @@ public final class Binder {
     }
 
     /**
-     * Validates that the target table, projected columns, and optional predicate in
-     * a {@code SELECT} statement exist in the pinned snapshot and match types.
+     * Validates that the target table and optional predicate in a {@code SELECT}
+     * statement exist in the pinned snapshot and match types.
      *
      * @param statement the select statement
      * @param snapshot  pinned catalog snapshot of the target table
@@ -123,18 +134,43 @@ public final class Binder {
      *                                  unknown, or the predicate type mismatches
      */
     private void bindSelect(SelectStatement statement, Catalog snapshot) {
-        requireMatchingSnapshot(statement.tableName(), snapshot);
-        List<ColumnSpec> schema = snapshot.columnSpecs();
+        bindTableAndWhere(statement.tableName(), statement.where(), snapshot);
+    }
 
-        if (statement.where().isEmpty()) {
+    /**
+     * Validates that the target table and optional predicate in a {@code DELETE}
+     * statement exist in the pinned snapshot and match types.
+     *
+     * @param statement the delete statement
+     * @param snapshot  pinned catalog snapshot of the target table
+     * @throws IllegalArgumentException if the snapshot is null, a column is
+     *                                  unknown, or the predicate type mismatches
+     */
+    private void bindDelete(DeleteStatement statement, Catalog snapshot) {
+        bindTableAndWhere(statement.tableName(), statement.where(), snapshot);
+    }
+
+    /**
+     * Validates that the target table exists and any optional WHERE predicate
+     * references an existing column with a matching constant type.
+     *
+     * @param tableName statement's target table name
+     * @param where     optional predicate for filtering rows
+     * @param snapshot  pinned catalog snapshot
+     * @throws IllegalArgumentException if snapshot is invalid, column is unknown,
+     *                                  or constant type does not match column type
+     */
+    private void bindTableAndWhere(String tableName, Optional<Predicate> where, Catalog snapshot) {
+        requireMatchingSnapshot(tableName, snapshot);
+        if (where.isEmpty()) {
             return;
         }
 
-        Predicate predicate = statement.where().get();
-        ColumnSpec matchedColumn = schema.stream()
+        Predicate predicate = where.get();
+        ColumnSpec matchedColumn = snapshot.columnSpecs().stream()
                 .filter(column -> column.name().equals(predicate.columnName()))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("unknown column: " + predicate.columnName()));
+                .orElseThrow(() -> fail("unknown column: " + predicate.columnName()));
 
         validatePredicateType(matchedColumn.type(), predicate.constant());
     }
@@ -149,7 +185,7 @@ public final class Binder {
      */
     private static void requireMatchingSnapshot(String tableName, Catalog snapshot) {
         if (snapshot == null || !snapshot.table().equals(tableName)) {
-            throw new IllegalArgumentException("unknown table: " + tableName);
+            throw fail("unknown table: " + tableName);
         }
     }
 
@@ -170,7 +206,19 @@ public final class Binder {
         };
 
         if (!valid) {
-            throw new IllegalArgumentException("constant type does not match column type: " + columnType);
+            throw fail("constant type does not match column type: " + columnType);
         }
+    }
+
+    /**
+     * Logs validation failure at ERROR level and constructs an
+     * {@link IllegalArgumentException}.
+     *
+     * @param message failure message describing the validation violation
+     * @return constructed IllegalArgumentException
+     */
+    private static IllegalArgumentException fail(String message) {
+        LOGGER.error("bind_failed reason={}", LogSanitizer.sanitize(message));
+        return new IllegalArgumentException(message);
     }
 }
