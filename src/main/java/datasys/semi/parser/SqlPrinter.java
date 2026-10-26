@@ -3,12 +3,19 @@ package datasys.semi.parser;
 import java.math.BigDecimal;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import datasys.semi.models.*;
+import datasys.semi.util.LogSanitizer;
 
 /**
  * Pretty-printer rendering AST Statement records back to canonical SQL text.
  */
 public final class SqlPrinter {
+
+    // --- Constants ---
+    private static final Logger LOGGER = LoggerFactory.getLogger(SqlPrinter.class);
 
     /**
      * Constructs a new SqlPrinter.
@@ -21,17 +28,19 @@ public final class SqlPrinter {
      *
      * @param statement the AST statement to print
      * @return semicolon-terminated SQL text representation
-     * @throws IllegalArgumentException if statement is null
+     * @throws IllegalArgumentException if statement is null or contains a literal
+     *                                  that cannot be represented in SQL
      */
     public String print(Statement statement) {
         if (statement == null) {
-            throw new IllegalArgumentException("statement must not be null");
+            throw fail("statement must not be null");
         }
 
         return switch (statement) {
             case CreateTableStatement createTable -> printCreateTable(createTable);
             case CopyStatement copy -> printCopy(copy);
             case SelectStatement select -> printSelect(select);
+            case DeleteStatement delete -> printDelete(delete);
         };
     }
 
@@ -53,9 +62,11 @@ public final class SqlPrinter {
      *
      * @param statement the copy statement
      * @return SQL text string
+     * @throws IllegalArgumentException if the CSV path contains unrepresentable
+     *                                  characters
      */
     private String printCopy(CopyStatement statement) {
-        return "COPY " + statement.tableName() + " FROM '" + statement.csvFilePath() + "';";
+        return "COPY " + statement.tableName() + " FROM " + formatString(statement.csvFilePath()) + ";";
     }
 
     /**
@@ -63,6 +74,8 @@ public final class SqlPrinter {
      *
      * @param statement the select statement
      * @return SQL text string
+     * @throws IllegalArgumentException if the predicate literal cannot be
+     *                                  represented in SQL
      */
     private String printSelect(SelectStatement statement) {
         String columnsPart = "*";
@@ -79,10 +92,29 @@ public final class SqlPrinter {
     }
 
     /**
+     * Formats a DELETE statement as SQL text.
+     *
+     * @param statement the delete statement
+     * @return SQL text string
+     * @throws IllegalArgumentException if the predicate literal cannot be
+     *                                  represented in SQL
+     */
+    private String printDelete(DeleteStatement statement) {
+        if (statement.where().isEmpty()) {
+            return "DELETE FROM " + statement.tableName() + ";";
+        }
+
+        Predicate predicate = statement.where().get();
+        return "DELETE FROM " + statement.tableName() + " WHERE " + printPredicate(predicate) + ";";
+    }
+
+    /**
      * Formats a Predicate as SQL text.
      *
      * @param predicate the predicate condition
      * @return predicate SQL text
+     * @throws IllegalArgumentException if the predicate constant cannot be
+     *                                  represented in SQL
      */
     private String printPredicate(Predicate predicate) {
         String operator = switch (predicate.comparison()) {
@@ -100,16 +132,31 @@ public final class SqlPrinter {
      *
      * @param constant constant value: String, Long, or Double
      * @return formatted literal string accepted by the grammar
-     * @throws IllegalArgumentException if the constant is of an unsupported type
+     * @throws IllegalArgumentException if the constant is of an unsupported type,
+     *                                  contains unrepresentable characters,
      *                                  or is a non-finite Double
      */
     private String formatLiteral(Object constant) {
         return switch (constant) {
-            case String stringValue -> "'" + stringValue + "'";
+            case String stringValue -> formatString(stringValue);
             case Long longValue -> Long.toString(longValue);
             case Double doubleValue -> formatDouble(doubleValue);
-            default -> throw new IllegalArgumentException("unsupported constant type: " + constant);
+            default -> throw fail("unsupported constant type: " + constant);
         };
+    }
+
+    /**
+     * Formats a string as a single-quoted SQL literal ({@code '...'}).
+     *
+     * @param value raw string value
+     * @return single-quoted literal string
+     * @throws IllegalArgumentException if value contains single-quotes or newlines
+     */
+    private static String formatString(String value) {
+        if (value.contains("'") || value.contains("\r") || value.contains("\n")) {
+            throw fail("string contains characters that cannot be represented in SQL literal: " + value);
+        }
+        return "'" + value + "'";
     }
 
     /**
@@ -125,7 +172,7 @@ public final class SqlPrinter {
      */
     private String formatDouble(double value) {
         if (!Double.isFinite(value)) {
-            throw new IllegalArgumentException("non-finite double has no SQL literal: " + value);
+            throw fail("non-finite double has no SQL literal: " + value);
         }
 
         String shortestText = Double.toString(value);
@@ -135,5 +182,17 @@ public final class SqlPrinter {
 
         String plainText = new BigDecimal(shortestText).toPlainString();
         return plainText.contains(".") ? plainText : plainText + ".0";
+    }
+
+    /**
+     * Logs a printing failure at ERROR level and constructs an
+     * {@link IllegalArgumentException}.
+     *
+     * @param message failure message describing the unrepresentable AST input
+     * @return constructed IllegalArgumentException
+     */
+    private static IllegalArgumentException fail(String message) {
+        LOGGER.error("print_failed reason={}", LogSanitizer.sanitize(message));
+        return new IllegalArgumentException(message);
     }
 }
