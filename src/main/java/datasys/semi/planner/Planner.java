@@ -8,6 +8,9 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import datasys.semi.engine.StorageEngine;
+import datasys.semi.engine.StorageEngine.Catalog;
+import datasys.semi.engine.StorageEngine.Partition;
+import datasys.semi.engine.StorageEngine.Statistics;
 import datasys.semi.models.BoundPredicate;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.ScanStats;
@@ -20,15 +23,14 @@ import datasys.semi.schema.ColumnSpec;
 import datasys.semi.util.LogSanitizer;
 
 /**
- * Transforms bound SQL statements into executable Volcano operator pipelines.
+ * Transforms bound SQL statements into executable Volcano operator pipelines
+ * against a pinned {@link Catalog} snapshot.
  *
  * <p>
  * Partition pruning occurs here before any data file is opened. For queries
- * with
- * a WHERE predicate, min/max partition statistics from the catalog are
- * evaluated,
- * pruning decisions are logged, and surviving partition numbers are passed into
- * the operator tree.
+ * with a WHERE predicate, min/max partition statistics from the pinned snapshot
+ * are evaluated, pruning decisions are logged, and surviving partition numbers
+ * are passed into the operator tree.
  */
 public final class Planner {
 
@@ -40,13 +42,13 @@ public final class Planner {
     private final StorageEngine engine;
 
     // --- Observable Metrics ---
-    private ScanStats lastScanStats = new ScanStats(0, 0, 0);
+    private ScanStats lastScanStats = new ScanStats(0, 0, 0, 0);
 
     /**
      * Constructs a new Planner backed by the specified storage engine.
      *
      * @param engine storage engine managing catalogs and data files
-     * @throws IllegalArgumentException if engine is null
+     * @throws IllegalArgumentException if {@code engine} is null
      */
     public Planner(StorageEngine engine) {
         if (engine == null) {
@@ -59,34 +61,37 @@ public final class Planner {
     }
 
     /**
-     * Creates an operator execution plan for a SELECT statement.
+     * Creates an operator execution plan for a {@code SELECT} statement against a
+     * pinned {@link Catalog} snapshot.
      *
      * @param statement the bound select statement to plan
+     * @param snapshot  pinned catalog snapshot of the target table
      * @return root operator of the planned pipeline
-     * @throws IllegalArgumentException if statement is null or targets an unknown
-     *                                  table/column
+     * @throws IllegalArgumentException if {@code statement} or {@code snapshot} is
+     *                                  null,
+     *                                  the snapshot does not match the statement's
+     *                                  table,
+     *                                  or the statement references an unknown
+     *                                  column
      */
-    public Operator plan(SelectStatement statement) {
-        if (statement == null) {
-            throw new IllegalArgumentException("statement must not be null");
+    public Operator plan(SelectStatement statement, Catalog snapshot) {
+        if (statement == null || snapshot == null) {
+            throw new IllegalArgumentException("statement and snapshot must not be null");
+        }
+        if (!snapshot.table().equals(statement.tableName())) {
+            throw new IllegalArgumentException("unknown table: " + statement.tableName());
         }
 
-        String tableName = statement.tableName();
-        List<ColumnSpec> schema = engine.schema(tableName);
-        List<StorageEngine.Partition> partitions = engine.partitions(tableName);
-
-        Operator root;
-        if (statement.where().isEmpty()) {
-            root = planWithoutPredicate(tableName, partitions);
-        } else {
-            root = planWithPredicate(tableName, schema, partitions, statement.where().get());
-        }
+        List<ColumnSpec> schema = snapshot.columnSpecs();
+        Operator root = statement.where().isEmpty()
+                ? planWithoutPredicate(snapshot)
+                : planWithPredicate(snapshot, schema, statement.where().get());
 
         if (statement.columns().isPresent()) {
             List<String> projectedColumnNames = statement.columns().get();
             int[] columnIndices = new int[projectedColumnNames.size()];
-            for (int i = 0; i < projectedColumnNames.size(); i++) {
-                columnIndices[i] = resolveColumnIndex(schema, projectedColumnNames.get(i));
+            for (int index = 0; index < projectedColumnNames.size(); index++) {
+                columnIndices[index] = resolveColumnIndex(schema, projectedColumnNames.get(index));
             }
             root = new ProjectOperator(root, columnIndices);
         }
@@ -95,7 +100,8 @@ public final class Planner {
     }
 
     /**
-     * Returns the scan statistics calculated during the most recent plan call.
+     * Returns the scan statistics calculated during the most recent {@link #plan}
+     * call.
      *
      * @return the last scan statistics
      */
@@ -106,46 +112,43 @@ public final class Planner {
     /**
      * Builds a bare scan plan when no predicate is present.
      *
-     * @param tableName  name of the table being scanned
-     * @param partitions partition metadata list from catalog
-     * @return scan operator reading all partitions
+     * @param snapshot pinned catalog snapshot of the table being scanned
+     * @return scan operator reading all partitions in the snapshot
      */
-    private Operator planWithoutPredicate(String tableName, List<StorageEngine.Partition> partitions) {
-        int totalPartitions = partitions.size();
+    private Operator planWithoutPredicate(Catalog snapshot) {
+        int totalPartitions = snapshot.partitions().size();
         List<Integer> allPartitions = new ArrayList<>(totalPartitions);
         for (int index = 0; index < totalPartitions; index++) {
             allPartitions.add(index);
-            LOGGER.debug("table={} partition={} decision=READ reason=noPredicate", tableName, index);
+            LOGGER.debug("table={} partition={} decision=READ reason=noPredicate", snapshot.table(), index);
         }
 
-        lastScanStats = new ScanStats(totalPartitions, totalPartitions, 0);
-        return new ScanOperator(engine, tableName, allPartitions);
+        lastScanStats = new ScanStats(totalPartitions, totalPartitions, 0, snapshot.version());
+        return new ScanOperator(engine, snapshot, allPartitions);
     }
 
     /**
      * Builds a filter-over-scan plan evaluating partition summaries for pruning.
      *
-     * @param tableName  name of the table being scanned
-     * @param schema     table schema
-     * @param partitions partition metadata list from catalog
-     * @param predicate  filter predicate to evaluate
+     * @param snapshot  pinned catalog snapshot of the table being scanned
+     * @param schema    table schema from the snapshot
+     * @param predicate filter predicate to evaluate
      * @return filter operator wrapping scan operator
      */
-    private Operator planWithPredicate(String tableName, List<ColumnSpec> schema,
-            List<StorageEngine.Partition> partitions, Predicate predicate) {
+    private Operator planWithPredicate(Catalog snapshot, List<ColumnSpec> schema, Predicate predicate) {
         int columnIndex = resolveColumnIndex(schema, predicate.columnName());
         ColumnSpec column = schema.get(columnIndex);
 
-        List<Integer> survivingPartitions = prunePartitions(tableName, partitions, column, predicate);
-        int totalPartitions = partitions.size();
+        List<Integer> survivingPartitions = prunePartitions(snapshot.table(), snapshot.partitions(), column, predicate);
+        int totalPartitions = snapshot.partitions().size();
         int readCount = survivingPartitions.size();
         int prunedCount = totalPartitions - readCount;
 
-        lastScanStats = new ScanStats(totalPartitions, readCount, prunedCount);
+        lastScanStats = new ScanStats(totalPartitions, readCount, prunedCount, snapshot.version());
 
         BoundPredicate boundPredicate = new BoundPredicate(
                 columnIndex, predicate.comparison(), predicate.constant());
-        ScanOperator scanOperator = new ScanOperator(engine, tableName, survivingPartitions);
+        ScanOperator scanOperator = new ScanOperator(engine, snapshot, survivingPartitions);
         return new FilterOperator(scanOperator, boundPredicate);
     }
 
@@ -154,18 +157,18 @@ public final class Planner {
      * irrelevant partitions.
      *
      * @param tableName  table name for logging
-     * @param partitions partition metadata list
+     * @param partitions partition metadata list from the pinned snapshot
      * @param column     predicate column specification
      * @param predicate  the filter predicate
      * @return surviving partition numbers in ascending order
      */
-    private List<Integer> prunePartitions(String tableName, List<StorageEngine.Partition> partitions,
+    private List<Integer> prunePartitions(String tableName, List<Partition> partitions,
             ColumnSpec column, Predicate predicate) {
         List<Integer> survivingPartitions = new ArrayList<>();
 
         for (int partitionNumber = 0; partitionNumber < partitions.size(); partitionNumber++) {
-            StorageEngine.Partition partition = partitions.get(partitionNumber);
-            StorageEngine.Statistics statistics = partition.statistics.get(column.name());
+            Partition partition = partitions.get(partitionNumber);
+            Statistics statistics = partition.statistics().get(column.name());
 
             if (statistics == null) {
                 LOGGER.debug("table={} partition={} decision=READ reason=missingStats", tableName, partitionNumber);
@@ -173,14 +176,15 @@ public final class Planner {
                 continue;
             }
 
-            Object min = StorageEngine.parseStatistic(statistics.min, column.type());
-            Object max = StorageEngine.parseStatistic(statistics.max, column.type());
+            Object min = StorageEngine.parseStatistic(statistics.min(), column.type());
+            Object max = StorageEngine.parseStatistic(statistics.max(), column.type());
             boolean shouldPrune = engine.shouldPrune(
                     column.type(), predicate.comparison(), predicate.constant(), min, max);
 
             LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                    tableName, predicate.columnName(), predicate.comparison(), LogSanitizer.sanitize(predicate.constant()),
-                    partitionNumber, LogSanitizer.sanitize(statistics.min), LogSanitizer.sanitize(statistics.max),
+                    tableName, predicate.columnName(), predicate.comparison(),
+                    LogSanitizer.sanitize(predicate.constant()),
+                    partitionNumber, LogSanitizer.sanitize(statistics.min()), LogSanitizer.sanitize(statistics.max()),
                     shouldPrune ? "PRUNED" : "READ");
 
             if (!shouldPrune) {

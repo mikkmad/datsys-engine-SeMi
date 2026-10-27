@@ -11,7 +11,9 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -20,7 +22,11 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.MDC;
 
 import datasys.semi.engine.StorageEngine;
+import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.executor.Executor;
+import datasys.semi.models.SelectStatement;
+import datasys.semi.operators.Operator;
+import datasys.semi.planner.Planner;
 
 class ExecutorTest {
 
@@ -100,8 +106,7 @@ class ExecutorTest {
 
     /**
      * Verifies execution halts at the first failing statement, restores MDC
-     * statementNumber to 0,
-     * and leaves subsequent statements unexecuted.
+     * statementNumber to 0, and leaves subsequent statements unexecuted.
      */
     @Test
     void haltsExecutionAtFirstErrorAndResetsMdc() {
@@ -119,7 +124,7 @@ class ExecutorTest {
         assertEquals("0", MDC.get("statementNumber"));
 
         // Third statement (COPY) was skipped due to failure on statement 2
-        assertTrue(engine.partitions("trips").isEmpty());
+        assertTrue(engine.snapshot("trips").partitions().isEmpty());
     }
 
     /**
@@ -160,5 +165,80 @@ class ExecutorTest {
                 .anyMatch(line -> line.contains(",2,") && line.contains(",ERROR,")
                         && line.contains("statement_failed operation=SELECT reason=unknown table: missing_table"));
         assertTrue(hasFailedError, "expected ERROR line with active statementNumber 2 and statement_failed message");
+    }
+
+    /**
+     * Verifies that SELECT after each commit sees that commit's cumulative row
+     * count.
+     */
+    @Test
+    void selectAfterEachCommitSeesThatCommitsRows() {
+        Executor executor = new Executor(engine);
+        executor.execute("CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);");
+        assertEquals(0, executor.executeQuery("SELECT * FROM trips;").size());
+        assertEquals(0L, engine.snapshot("trips").version());
+
+        executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
+        assertEquals(8, executor.executeQuery("SELECT * FROM trips;").size());
+        assertEquals(1L, engine.snapshot("trips").version());
+
+        executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
+        assertEquals(16, executor.executeQuery("SELECT * FROM trips;").size());
+        assertEquals(2L, engine.snapshot("trips").version());
+    }
+
+    /**
+     * Verifies that a plan built from snapshot v1 still yields only the v1 rows
+     * even after a v2 commit appends more partitions.
+     */
+    @Test
+    void pinnedSnapshotIsUnaffectedByLaterCommit() {
+        Executor executor = new Executor(engine);
+        executor.execute("""
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM '%s';
+                """.formatted(csvFile.toString()));
+
+        Catalog snapshotV1 = engine.snapshot("trips");
+        assertEquals(1L, snapshotV1.version());
+        Planner planner = new Planner(engine);
+        Operator pinnedPlan = planner.plan(
+                new SelectStatement("trips", Optional.empty(), Optional.empty()), snapshotV1);
+
+        // Commit v2 while pinnedPlan still holds snapshotV1
+        executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
+        assertEquals(2L, engine.snapshot("trips").version());
+
+        List<Object[]> rowsFromPinnedPlan = new ArrayList<>();
+        pinnedPlan.open();
+        try {
+            Object[] row;
+            while ((row = pinnedPlan.next()) != null) {
+                rowsFromPinnedPlan.add(row);
+            }
+        } finally {
+            pinnedPlan.close();
+        }
+
+        assertEquals(8, rowsFromPinnedPlan.size());
+        assertEquals(16, executor.executeQuery("SELECT * FROM trips;").size());
+    }
+
+    /**
+     * Verifies that committing against a stale base catalog version throws
+     * IllegalStateException (Invariant I3).
+     */
+    @Test
+    void commitWithStaleBaseVersionThrowsIllegalStateException() {
+        Executor executor = new Executor(engine);
+        executor.execute("CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);");
+
+        Catalog staleSnapshotV0 = engine.snapshot("trips");
+        executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
+        assertEquals(1L, engine.snapshot("trips").version());
+
+        assertThrows(IllegalStateException.class,
+                () -> engine.copyFile(staleSnapshotV0, csvFile.toString()));
+        assertEquals(1L, engine.snapshot("trips").version());
     }
 }
