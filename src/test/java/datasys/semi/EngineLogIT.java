@@ -109,7 +109,8 @@ class EngineLogIT {
                 assertTrue(messages.stream().anyMatch(
                                 msg -> msg.startsWith(
                                                 "statement=COPY table=" + tableName
-                                                                + " rows=8 partitions=1 version=1 durationMs=")),
+                                                                + " file=" + csvPath
+                                                                                + " rows=8 partitions=1 version=1 durationMs=")),
                                 "expected COPY summary with version=1");
                 assertTrue(messages.stream().anyMatch(
                                 msg -> msg.startsWith(

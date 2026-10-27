@@ -226,9 +226,9 @@ public final class Executor {
      */
     private void executeCopy(CopyStatement statement, Catalog snapshot, long started) {
         CopyResult result = engine.copyFile(snapshot, statement.csvFilePath());
-        LOGGER.debug("statement=COPY table={} rows={} partitions={} version={} durationMs={}",
-                statement.tableName(), result.rows(), result.partitions(), result.version(),
-                elapsedMillis(started));
+        LOGGER.debug("statement=COPY table={} file={} rows={} partitions={} version={} durationMs={}",
+                statement.tableName(), LogSanitizer.sanitize(statement.csvFilePath()), result.rows(),
+                result.partitions(), result.version(), elapsedMillis(started));
     }
 
     /**
