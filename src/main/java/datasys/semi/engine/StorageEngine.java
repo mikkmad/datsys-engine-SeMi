@@ -19,10 +19,15 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -47,6 +52,14 @@ import org.slf4j.MDC;
  * -v<version>.json} and swapped into the in-memory
  * catalog map atomically after the disk rename succeeds. Readers pin a
  * {@link Catalog} snapshot at statement start and never re-read live metadata.
+ *
+ * <p>
+ * Partition files are reclaimed by reference: a file is deleted only once no
+ * retained catalog version (the newest {@link #MAX_RETAINED_CATALOG_VERSIONS})
+ * and no pinned version still lists it. Pinning, releasing, committing and the
+ * retention window all update under the per-table lock of
+ * {@code catalogs.compute}, so the class is safe for concurrent statements.
+ * Orphans left by a crash are swept once at startup.
  */
 public final class StorageEngine {
 
@@ -67,6 +80,10 @@ public final class StorageEngine {
     private final int maxRowsPerPartition;
     private final ObjectMapper objectMapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
     private final Map<String, Catalog> catalogs = new ConcurrentHashMap<>();
+
+    // --- Version Retention & Readers (mutated only inside catalogs.compute) ---
+    private final Map<String, List<Catalog>> retainedVersions = new ConcurrentHashMap<>();
+    private final Map<PinKey, PinnedVersion> pinnedVersions = new ConcurrentHashMap<>();
 
     /**
      * Constructs a storage engine with the default partition capacity.
@@ -134,6 +151,71 @@ public final class StorageEngine {
             throw new IllegalArgumentException("unknown table: " + tableName);
         }
         return catalog;
+    }
+
+    /**
+     * Pins the current committed catalog version of a table for the duration of a
+     * statement by incrementing that version's reader count. Partition files of a
+     * pinned version are never garbage-collected. Every successful call must be
+     * matched by exactly one {@link #releaseSnapshot(Catalog)}.
+     *
+     * @param tableName name of the table to pin
+     * @return immutable catalog snapshot at the latest committed version
+     * @throws IllegalArgumentException if the table does not exist or
+     *                                  {@code tableName} is null
+     */
+    public Catalog pinSnapshot(String tableName) {
+        if (tableName == null) {
+            throw new IllegalArgumentException("unknown table: null");
+        }
+        AtomicReference<Catalog> pinned = new AtomicReference<>();
+        catalogs.computeIfPresent(tableName, (name, current) -> {
+            pinnedVersions.merge(new PinKey(name, current.version()), new PinnedVersion(current, 1),
+                    (existing, added) -> new PinnedVersion(existing.catalog(), existing.readers() + 1));
+            pinned.set(current);
+            return current;
+        });
+        if (pinned.get() == null) {
+            throw new IllegalArgumentException("unknown table: " + tableName);
+        }
+        return pinned.get();
+    }
+
+    /**
+     * Releases one reader of a version pinned by {@link #pinSnapshot(String)}. When
+     * the last reader of a version outside the retention window releases it, the
+     * partition files no retained or pinned version references are deleted.
+     *
+     * @param snapshot catalog snapshot previously returned by
+     *                 {@link #pinSnapshot(String)}
+     * @throws IllegalArgumentException if {@code snapshot} is null
+     * @throws IllegalStateException    if {@code snapshot} is not currently pinned
+     */
+    public void releaseSnapshot(Catalog snapshot) {
+        if (snapshot == null) {
+            throw new IllegalArgumentException("snapshot must not be null");
+        }
+        Set<String> unreachable = new HashSet<>();
+        catalogs.compute(snapshot.table(), (name, current) -> {
+            boolean lastReader = decrementReaders(new PinKey(name, snapshot.version()));
+            if (lastReader && !isRetained(name, snapshot.version())) {
+                unreachable.addAll(collectUnreachablePartitions(name, List.of(snapshot)));
+            }
+            return current;
+        });
+        deletePartitionFiles(snapshot.table(), unreachable);
+    }
+
+    /**
+     * Returns the number of running statements that currently pin a version.
+     *
+     * @param tableName table name
+     * @param version   catalog version
+     * @return reader count, or 0 if the version is not pinned
+     */
+    public int pinnedReaderCount(String tableName, long version) {
+        PinnedVersion pinned = pinnedVersions.get(new PinKey(tableName, version));
+        return pinned == null ? 0 : pinned.readers();
     }
 
     /**
@@ -211,8 +293,53 @@ public final class StorageEngine {
     }
 
     /**
+     * Deletes rows copy-on-write: partitions outside {@code rewriteSet} are carried
+     * over by reference, every partition in it is re-read and its surviving rows
+     * are written to a new partition file, and the resulting partition list is
+     * committed as the next version. Original partition files are never modified.
+     *
+     * <p>
+     * A partition in the rewrite set without any matching row is carried over
+     * unchanged; a partition whose rows all match is dropped. A new version is
+     * committed even if no row matches. If the commit fails, the new partition
+     * files written by this call are deleted and the table keeps its version.
+     *
+     * @param snapshot     pinned catalog snapshot of the target table
+     * @param rewriteSet   zero-based partition numbers that may contain matches
+     * @param rowMatcher   row test returning true for rows to delete
+     * @return summary of deleted rows, rewritten and carried partitions, and the
+     *         committed version
+     * @throws IllegalArgumentException if any argument is null
+     * @throws IllegalStateException    if a partition cannot be read or written,
+     *                                  or the table's version advanced since
+     *                                  {@code snapshot} was taken
+     */
+    public DeleteResult deleteRows(Catalog snapshot, List<Integer> rewriteSet, Predicate<Object[]> rowMatcher) {
+        if (snapshot == null || rewriteSet == null || rowMatcher == null) {
+            throw new IllegalArgumentException("snapshot, rewrite set and row matcher must not be null");
+        }
+        LOGGER.debug("api=deleteRows table={} version={} rewriteSet={}", snapshot.table(), snapshot.version(),
+                rewriteSet.size());
+
+        Path tableDirectory = dataFilesDirectory.resolve(snapshot.table());
+        List<Path> writtenFiles = new ArrayList<>();
+        boolean committed = false;
+        try {
+            DeleteResult result = rewriteAndCommit(snapshot, Set.copyOf(rewriteSet), rowMatcher, tableDirectory,
+                    writtenFiles);
+            committed = true;
+            return result;
+        } finally {
+            if (!committed) {
+                discardWrittenPartitions(tableDirectory, writtenFiles);
+            }
+        }
+    }
+
+    /**
      * Atomically commits {@code next} on disk and in memory if the table's current
-     * version still matches {@code base}.
+     * version still matches {@code base}, advances the table's retention window,
+     * and deletes partition files that became unreachable.
      *
      * @param base expected current catalog snapshot, or {@code null} when creating
      *             version 0
@@ -229,18 +356,22 @@ public final class StorageEngine {
 
         Path target = catalogsDirectory.resolve(catalogFileName(next.table(), next.version()));
         Path temporary = target.resolveSibling(target.getFileName() + ".tmp-" + UUID.randomUUID());
+        Set<String> unreachable = new HashSet<>();
 
         try {
             writeTemporaryCatalog(next, temporary);
             catalogs.compute(next.table(), (tableName, current) -> {
                 validateCommitBase(tableName, base, current);
                 publishCatalogAtomically(next, temporary, target);
+                List<Catalog> dropped = advanceRetentionWindow(tableName, next);
+                unreachable.addAll(collectUnreachablePartitions(tableName, dropped));
                 return next;
             });
         } finally {
             cleanupTemporaryFiles(List.of(temporary));
         }
 
+        deletePartitionFiles(next.table(), unreachable);
         pruneOldCatalogVersions(next.table());
     }
 
@@ -371,33 +502,304 @@ public final class StorageEngine {
     // --- Internal Storage & Partition Management ---
 
     /**
-     * Scans {@code catalogs/}, selects the highest version file per table, and
-     * populates the in-memory catalog map. Temporary files and non-matching
-     * filenames are ignored.
+     * Scans {@code catalogs/}, loads the newest retained catalog versions of every
+     * table, publishes the highest one as the table's current catalog, and sweeps
+     * files left behind by a crash. Non-matching filenames are ignored.
      *
      * @throws IOException if listing or reading catalog files fails
      */
     private void loadCatalogs() throws IOException {
-        Map<String, VersionedFile> latestByTable = new HashMap<>();
+        sweepTemporaryFiles(catalogsDirectory);
+
+        for (List<VersionedFile> tableFiles : listCatalogFilesByTable().values()) {
+            List<Catalog> retained = readRetainedCatalogs(tableFiles);
+            Catalog latest = retained.getLast();
+            catalogs.put(latest.table(), latest);
+            retainedVersions.put(latest.table(), retained);
+            sweepOrphanedPartitions(latest.table(), retained);
+            LOGGER.debug("table={} version={} retainedVersions={} loaded", latest.table(), latest.version(),
+                    retained.size());
+        }
+    }
+
+    /**
+     * Groups the versioned catalog files in {@code catalogs/} by table name.
+     *
+     * @return map from table name to its catalog files, in no particular order
+     * @throws IOException if the directory cannot be listed
+     */
+    private Map<String, List<VersionedFile>> listCatalogFilesByTable() throws IOException {
+        Map<String, List<VersionedFile>> filesByTable = new HashMap<>();
 
         try (Stream<Path> paths = Files.list(catalogsDirectory)) {
             for (Path path : paths.toList()) {
                 Matcher matcher = CATALOG_FILE_PATTERN.matcher(path.getFileName().toString());
-                if (!matcher.matches()) {
-                    continue;
+                if (matcher.matches()) {
+                    filesByTable.computeIfAbsent(matcher.group(1), name -> new ArrayList<>())
+                            .add(new VersionedFile(Long.parseLong(matcher.group(2)), path));
                 }
-                String tableName = matcher.group(1);
-                long version = Long.parseLong(matcher.group(2));
-                latestByTable.merge(tableName, new VersionedFile(version, path),
-                        (existing, candidate) -> candidate.version() > existing.version() ? candidate : existing);
             }
         }
+        return filesByTable;
+    }
 
-        for (VersionedFile latest : latestByTable.values()) {
-            Catalog catalog = objectMapper.readValue(latest.path().toFile(), Catalog.class);
-            catalogs.put(catalog.table(), catalog);
-            LOGGER.debug("table={} version={} loaded", catalog.table(), catalog.version());
+    /**
+     * Reads the newest {@link #MAX_RETAINED_CATALOG_VERSIONS} catalog files of one
+     * table in ascending version order.
+     *
+     * @param tableFiles all catalog files of one table
+     * @return retained catalogs, oldest first; the last entry is the current
+     *         version
+     * @throws IOException if a catalog file cannot be read
+     */
+    private List<Catalog> readRetainedCatalogs(List<VersionedFile> tableFiles) throws IOException {
+        List<VersionedFile> sorted = tableFiles.stream()
+                .sorted(Comparator.comparingLong(VersionedFile::version))
+                .toList();
+        List<VersionedFile> newest = sorted.subList(
+                Math.max(0, sorted.size() - MAX_RETAINED_CATALOG_VERSIONS), sorted.size());
+
+        List<Catalog> retained = new ArrayList<>(newest.size());
+        for (VersionedFile file : newest) {
+            retained.add(objectMapper.readValue(file.path().toFile(), Catalog.class));
         }
+        return List.copyOf(retained);
+    }
+
+    /**
+     * Deletes partition files of {@code tableName} that no retained catalog lists,
+     * plus temporary files, in {@code data/<table>/}. Runs only at startup, when no
+     * statement can be writing uncommitted partitions; these are the orphans of a
+     * {@code COPY} or {@code DELETE} that crashed before its commit.
+     *
+     * @param tableName table whose data directory is swept
+     * @param retained  retained catalog versions of the table
+     * @throws IOException if the data directory cannot be listed
+     */
+    private void sweepOrphanedPartitions(String tableName, List<Catalog> retained) throws IOException {
+        Path tableDirectory = dataFilesDirectory.resolve(tableName);
+        if (!Files.isDirectory(tableDirectory)) {
+            return;
+        }
+        sweepTemporaryFiles(tableDirectory);
+
+        Set<String> referenced = partitionPaths(retained);
+        Set<String> orphaned = new HashSet<>();
+        try (Stream<Path> paths = Files.list(tableDirectory)) {
+            paths.map(path -> dataDirectory.relativize(path).toString())
+                    .filter(relativePath -> relativePath.endsWith(".dat") && !referenced.contains(relativePath))
+                    .forEach(orphaned::add);
+        }
+        deletePartitionFiles(tableName, orphaned);
+    }
+
+    /**
+     * Deletes leftover {@code *.tmp-*} files of interrupted atomic writes in a
+     * directory. Failures are logged and not rethrown.
+     *
+     * @param directory directory to sweep
+     * @throws IOException if the directory cannot be listed
+     */
+    private static void sweepTemporaryFiles(Path directory) throws IOException {
+        try (Stream<Path> paths = Files.list(directory)) {
+            List<Path> temporaryFiles = paths
+                    .filter(path -> path.getFileName().toString().contains(".tmp-"))
+                    .toList();
+            temporaryFiles.forEach(path -> LOGGER.debug("api=sweepTemporaryFiles file={} deleted",
+                    LogSanitizer.sanitize(path.getFileName())));
+            cleanupTemporaryFiles(temporaryFiles);
+        }
+    }
+
+    /**
+     * Adds {@code next} to the table's in-memory retention window and removes the
+     * versions that fall out of it. Must run inside {@code catalogs.compute} for
+     * the table.
+     *
+     * @param tableName table being committed
+     * @param next      newly committed catalog version
+     * @return catalog versions that left the retention window, oldest first
+     */
+    private List<Catalog> advanceRetentionWindow(String tableName, Catalog next) {
+        List<Catalog> window = new ArrayList<>(retainedVersions.getOrDefault(tableName, List.of()));
+        window.add(next);
+
+        List<Catalog> dropped = new ArrayList<>();
+        while (window.size() > MAX_RETAINED_CATALOG_VERSIONS) {
+            dropped.add(window.removeFirst());
+        }
+        retainedVersions.put(tableName, List.copyOf(window));
+        return dropped;
+    }
+
+    /**
+     * Returns whether a version of a table is still inside its retention window.
+     *
+     * @param tableName table name
+     * @param version   catalog version
+     * @return true if the version is retained
+     */
+    private boolean isRetained(String tableName, long version) {
+        return retainedVersions.getOrDefault(tableName, List.of()).stream()
+                .anyMatch(catalog -> catalog.version() == version);
+    }
+
+    /**
+     * Decrements the reader count of a pinned version and forgets the version once
+     * its last reader is gone. Must run inside {@code catalogs.compute} for the
+     * table.
+     *
+     * @param key pinned table version
+     * @return true if this call released the last reader
+     * @throws IllegalStateException if the version is not pinned
+     */
+    private boolean decrementReaders(PinKey key) {
+        PinnedVersion pinned = pinnedVersions.get(key);
+        if (pinned == null) {
+            throw new IllegalStateException(
+                    "version " + key.version() + " of table " + key.table() + " is not pinned");
+        }
+        if (pinned.readers() > 1) {
+            pinnedVersions.put(key, new PinnedVersion(pinned.catalog(), pinned.readers() - 1));
+            return false;
+        }
+        pinnedVersions.remove(key);
+        return true;
+    }
+
+    /**
+     * Collects the partition paths of {@code candidates} that no retained version
+     * and no pinned version of the table still references. Must run inside
+     * {@code catalogs.compute} for the table so the reference sets are stable.
+     *
+     * @param tableName  table name
+     * @param candidates catalog versions that just became unreachable
+     * @return relative partition paths that can safely be deleted
+     */
+    private Set<String> collectUnreachablePartitions(String tableName, List<Catalog> candidates) {
+        Set<String> unreachable = partitionPaths(candidates);
+        if (unreachable.isEmpty()) {
+            return unreachable;
+        }
+        unreachable.removeAll(partitionPaths(retainedVersions.getOrDefault(tableName, List.of())));
+        pinnedVersions.forEach((key, pinned) -> {
+            if (key.table().equals(tableName)) {
+                unreachable.removeAll(partitionPaths(List.of(pinned.catalog())));
+            }
+        });
+        return unreachable;
+    }
+
+    /**
+     * Returns the relative paths of all partitions listed by the given catalogs.
+     *
+     * @param versions catalog versions to inspect
+     * @return mutable set of relative partition paths
+     */
+    private static Set<String> partitionPaths(List<Catalog> versions) {
+        Set<String> paths = new HashSet<>();
+        for (Catalog catalog : versions) {
+            catalog.partitions().forEach(partition -> paths.add(partition.path()));
+        }
+        return paths;
+    }
+
+    /**
+     * Deletes unreachable partition files. Failures are logged and not rethrown so
+     * garbage collection never rolls back an already committed version.
+     *
+     * @param tableName     table owning the partitions
+     * @param relativePaths partition paths relative to the data directory
+     */
+    private void deletePartitionFiles(String tableName, Set<String> relativePaths) {
+        for (String relativePath : relativePaths) {
+            try {
+                Files.deleteIfExists(dataDirectory.resolve(relativePath));
+                LOGGER.debug("api=collectGarbage table={} partition={} deleted", tableName,
+                        LogSanitizer.sanitize(relativePath));
+            } catch (IOException exception) {
+                LOGGER.error("api=collectGarbage table={} partition={} error={}", tableName,
+                        LogSanitizer.sanitize(relativePath), LogSanitizer.sanitize(exception.getMessage()));
+            }
+        }
+    }
+
+    /**
+     * Rewrites the partitions of the rewrite set, builds the next partition list
+     * and commits it as the next version.
+     *
+     * @param snapshot       pinned catalog snapshot of the target table
+     * @param rewriteSet     partition numbers that may contain matches
+     * @param rowMatcher     row test returning true for rows to delete
+     * @param tableDirectory directory receiving new partition files
+     * @param writtenFiles   collector recording new partition files for rollback
+     * @return summary of the committed delete
+     * @throws IllegalStateException if a partition cannot be read or written, or
+     *                               the commit fails
+     */
+    private DeleteResult rewriteAndCommit(Catalog snapshot, Set<Integer> rewriteSet, Predicate<Object[]> rowMatcher,
+            Path tableDirectory, List<Path> writtenFiles) {
+        List<Partition> nextPartitions = new ArrayList<>();
+        long rowsDeleted = 0;
+        int partitionsRewritten = 0;
+
+        for (int partitionNumber = 0; partitionNumber < snapshot.partitions().size(); partitionNumber++) {
+            PartitionRewrite rewrite = rewriteSet.contains(partitionNumber)
+                    ? rewritePartition(snapshot, partitionNumber, rowMatcher, tableDirectory, writtenFiles)
+                    : carryPartition(snapshot, partitionNumber);
+            rewrite.replacement().ifPresent(nextPartitions::add);
+            rowsDeleted += rewrite.rowsDeleted();
+            partitionsRewritten += rewrite.rowsDeleted() > 0 ? 1 : 0;
+        }
+
+        Catalog next = snapshot.withPartitions(nextPartitions);
+        commitCatalog(snapshot, next);
+        int partitionsCarried = snapshot.partitions().size() - partitionsRewritten;
+        return new DeleteResult(rowsDeleted, partitionsRewritten, partitionsCarried, next.version());
+    }
+
+    /**
+     * Carries a partition outside the rewrite set over by reference.
+     *
+     * @param snapshot        pinned catalog snapshot
+     * @param partitionNumber zero-based partition number in the snapshot
+     * @return rewrite outcome keeping the original partition entry
+     */
+    private static PartitionRewrite carryPartition(Catalog snapshot, int partitionNumber) {
+        LOGGER.debug("table={} partition={} decision=CARRIED reason=pruned", snapshot.table(), partitionNumber);
+        return new PartitionRewrite(Optional.of(snapshot.partitions().get(partitionNumber)), 0);
+    }
+
+    /**
+     * Copies the rows of one partition that do not match into a new partition. A
+     * partition without matches is carried over; a fully matched one is dropped.
+     *
+     * @param snapshot        pinned catalog snapshot
+     * @param partitionNumber zero-based partition number in the snapshot
+     * @param rowMatcher      row test returning true for rows to delete
+     * @param tableDirectory  directory receiving the new partition file
+     * @param writtenFiles    collector recording new partition files
+     * @return replacement partition (if any) and the number of rows removed
+     * @throws IllegalStateException if the partition cannot be read or written
+     */
+    private PartitionRewrite rewritePartition(Catalog snapshot, int partitionNumber, Predicate<Object[]> rowMatcher,
+            Path tableDirectory, List<Path> writtenFiles) {
+        Partition original = snapshot.partitions().get(partitionNumber);
+        List<Object[]> rows = readPartition(snapshot, original);
+        List<Object[]> survivors = rows.stream().filter(rowMatcher.negate()).toList();
+        int rowsDeleted = rows.size() - survivors.size();
+
+        if (rowsDeleted == 0) {
+            LOGGER.debug("table={} partition={} decision=CARRIED reason=noMatch", snapshot.table(), partitionNumber);
+            return new PartitionRewrite(Optional.of(original), 0);
+        }
+        LOGGER.debug("table={} partition={} decision=REWRITTEN rowsDeleted={} rowsKept={}", snapshot.table(),
+                partitionNumber, rowsDeleted, survivors.size());
+        if (survivors.isEmpty()) {
+            return new PartitionRewrite(Optional.empty(), rowsDeleted);
+        }
+        return new PartitionRewrite(Optional.of(writePartitionFile(snapshot.table(), tableDirectory, partitionNumber,
+                survivors, snapshot.schema(), writtenFiles)), rowsDeleted);
     }
 
     /**
@@ -944,6 +1346,34 @@ public final class StorageEngine {
     private record VersionedFile(long version, Path path) {
     }
 
+    /**
+     * Identifies one catalog version of one table in the reader-count map.
+     *
+     * @param table   table name
+     * @param version catalog version
+     */
+    private record PinKey(String table, long version) {
+    }
+
+    /**
+     * A pinned catalog version together with its number of running readers.
+     *
+     * @param catalog pinned catalog snapshot
+     * @param readers number of statements currently pinning it; always positive
+     */
+    private record PinnedVersion(Catalog catalog, int readers) {
+    }
+
+    /**
+     * Outcome of rewriting or carrying one partition during a {@code DELETE}.
+     *
+     * @param replacement partition entry for the next version, or empty if the
+     *                    partition was dropped
+     * @param rowsDeleted number of rows removed from the partition
+     */
+    private record PartitionRewrite(Optional<Partition> replacement, int rowsDeleted) {
+    }
+
     // --- Catalog & Storage Data Models ---
 
     /**
@@ -976,7 +1406,18 @@ public final class StorageEngine {
             List<Partition> combined = new ArrayList<>(partitions.size() + added.size());
             combined.addAll(partitions);
             combined.addAll(added);
-            return new Catalog(table, version + 1, schema, combined);
+            return withPartitions(combined);
+        }
+
+        /**
+         * Returns a new catalog snapshot at {@code version + 1} whose partition list is
+         * replaced by {@code nextPartitions}.
+         *
+         * @param nextPartitions complete partition list of the next version
+         * @return next catalog version with the same table name and schema
+         */
+        public Catalog withPartitions(List<Partition> nextPartitions) {
+            return new Catalog(table, version + 1, schema, nextPartitions);
         }
 
         /**

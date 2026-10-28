@@ -180,4 +180,42 @@ class EngineIT {
         String expectedCsv = String.join(System.lineSeparator(), expectedLines) + System.lineSeparator();
         assertArrayEquals(expectedCsv.getBytes(StandardCharsets.UTF_8), capturedOut.toByteArray());
     }
+    /**
+     * Required Integration Test 6: a script with CREATE, COPY, COPY, DELETE and
+     * SELECT run through {@code -f} returns the rows both COPY statements loaded
+     * minus the rows the DELETE removed.
+     */
+    @Test
+    void deleteScriptReturnsCopiedRowsMinusDeletedRows(@TempDir Path tempDir) throws IOException {
+        Path csvPath = copyResource(tempDir, "trips.csv");
+        Path secondCsvPath = tempDir.resolve("extra.csv");
+        Files.writeString(secondCsvPath, "Roskilde,250,399.0\nCopenhagen,7,11.5\n", StandardCharsets.UTF_8);
+
+        Path dataDir = tempDir.resolve("data");
+        System.setProperty("semi.data.dir", dataDir.toString());
+
+        Path scriptPath = tempDir.resolve("delete.sql");
+        String script = """
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM '%s';
+                COPY trips FROM '%s';
+                DELETE FROM trips WHERE city = 'Copenhagen';
+                SELECT * FROM trips;
+                """.formatted(
+                csvPath.toString().replace("\\", "/"),
+                secondCsvPath.toString().replace("\\", "/"));
+        Files.writeString(scriptPath, script, StandardCharsets.UTF_8);
+
+        Engine.main(new String[] { "-f", scriptPath.toString() });
+
+        List<String> expectedLines = List.of(
+                "Aarhus,187,301.0",
+                "Odense,95,120.75",
+                "Aalborg,210,340.5",
+                "Roskilde,31,45.0",
+                "Esbjerg,299,450.25",
+                "Roskilde,250,399.0");
+        String expectedCsv = String.join(System.lineSeparator(), expectedLines) + System.lineSeparator();
+        assertArrayEquals(expectedCsv.getBytes(StandardCharsets.UTF_8), capturedOut.toByteArray());
+    }
 }

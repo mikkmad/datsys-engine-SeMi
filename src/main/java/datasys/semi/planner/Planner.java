@@ -2,6 +2,7 @@ package datasys.semi.planner;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,6 +13,7 @@ import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.engine.StorageEngine.Partition;
 import datasys.semi.engine.StorageEngine.Statistics;
 import datasys.semi.models.BoundPredicate;
+import datasys.semi.models.DeleteStatement;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
@@ -100,6 +102,62 @@ public final class Planner {
     }
 
     /**
+     * Creates a copy-on-write plan for a {@code DELETE} statement against a pinned
+     * {@link Catalog} snapshot. The rewrite set comes from
+     * {@link #partitionsThatMayMatch}, the same helper SELECT prunes with, in the
+     * opposite role: partitions that may contain a match are rewritten, all others
+     * are carried over. Without a WHERE clause every partition is rewritten and
+     * every row matches.
+     *
+     * @param statement the bound delete statement to plan
+     * @param snapshot  pinned catalog snapshot of the target table
+     * @return rewrite set and row matcher for the storage engine
+     * @throws IllegalArgumentException if {@code statement} or {@code snapshot} is
+     *                                  null, the snapshot does not match the
+     *                                  statement's table, or the predicate column
+     *                                  is unknown
+     */
+    public DeletePlan planDelete(DeleteStatement statement, Catalog snapshot) {
+        if (statement == null || snapshot == null) {
+            throw new IllegalArgumentException("statement and snapshot must not be null");
+        }
+        if (!snapshot.table().equals(statement.tableName())) {
+            throw new IllegalArgumentException("unknown table: " + statement.tableName());
+        }
+        if (statement.where().isEmpty()) {
+            List<Integer> allPartitions = IntStream.range(0, snapshot.partitions().size()).boxed().toList();
+            return new DeletePlan(allPartitions, row -> true);
+        }
+
+        Predicate predicate = statement.where().get();
+        BoundPredicate boundPredicate = new BoundPredicate(
+                resolveColumnIndex(snapshot.columnSpecs(), predicate.columnName()),
+                predicate.comparison(), predicate.constant());
+        return new DeletePlan(partitionsThatMayMatch(snapshot, predicate), boundPredicate::matches);
+    }
+
+    /**
+     * Decides from the snapshot's min/max summaries which partitions may contain
+     * rows satisfying {@code predicate}. This is the single pruning decision shared
+     * by SELECT (partitions to read) and DELETE (partitions to rewrite); every
+     * decision is logged.
+     *
+     * @param snapshot  pinned catalog snapshot of the table
+     * @param predicate filter predicate with a constant of the column's type
+     * @return partition numbers that may contain matches, in ascending order
+     * @throws IllegalArgumentException if an argument is null or the predicate
+     *                                  column is unknown
+     */
+    public List<Integer> partitionsThatMayMatch(Catalog snapshot, Predicate predicate) {
+        if (snapshot == null || predicate == null) {
+            throw new IllegalArgumentException("snapshot and predicate must not be null");
+        }
+        List<ColumnSpec> schema = snapshot.columnSpecs();
+        ColumnSpec column = schema.get(resolveColumnIndex(schema, predicate.columnName()));
+        return prunePartitions(snapshot.table(), snapshot.partitions(), column, predicate);
+    }
+
+    /**
      * Returns the scan statistics calculated during the most recent {@link #plan}
      * call.
      *
@@ -137,9 +195,8 @@ public final class Planner {
      */
     private Operator planWithPredicate(Catalog snapshot, List<ColumnSpec> schema, Predicate predicate) {
         int columnIndex = resolveColumnIndex(schema, predicate.columnName());
-        ColumnSpec column = schema.get(columnIndex);
 
-        List<Integer> survivingPartitions = prunePartitions(snapshot.table(), snapshot.partitions(), column, predicate);
+        List<Integer> survivingPartitions = partitionsThatMayMatch(snapshot, predicate);
         int totalPartitions = snapshot.partitions().size();
         int readCount = survivingPartitions.size();
         int prunedCount = totalPartitions - readCount;
