@@ -2,12 +2,14 @@ package datasys.semi.parser;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
 import datasys.semi.models.CreateTableStatement;
+import datasys.semi.models.DeleteStatement;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
@@ -54,6 +56,7 @@ public final class Binder {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bind(copy, engine.snapshot(copy.tableName()));
             case SelectStatement select -> bind(select, engine.snapshot(select.tableName()));
+            case DeleteStatement delete -> bind(delete, engine.snapshot(delete.tableName()));
         }
     }
 
@@ -74,6 +77,7 @@ public final class Binder {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bindCopy(copy, snapshot);
             case SelectStatement select -> bindSelect(select, snapshot);
+            case DeleteStatement delete -> bindDelete(delete, snapshot);
         }
     }
 
@@ -114,8 +118,8 @@ public final class Binder {
     }
 
     /**
-     * Validates that the target table, projected columns, and optional predicate in
-     * a {@code SELECT} statement exist in the pinned snapshot and match types.
+     * Validates that the target table and optional predicate in a {@code SELECT}
+     * statement exist in the pinned snapshot and match types.
      *
      * @param statement the select statement
      * @param snapshot  pinned catalog snapshot of the target table
@@ -123,15 +127,40 @@ public final class Binder {
      *                                  unknown, or the predicate type mismatches
      */
     private void bindSelect(SelectStatement statement, Catalog snapshot) {
-        requireMatchingSnapshot(statement.tableName(), snapshot);
-        List<ColumnSpec> schema = snapshot.columnSpecs();
+        bindTableAndWhere(statement.tableName(), statement.where(), snapshot);
+    }
 
-        if (statement.where().isEmpty()) {
+    /**
+     * Validates that the target table and optional predicate in a {@code DELETE}
+     * statement exist in the pinned snapshot and match types.
+     *
+     * @param statement the delete statement
+     * @param snapshot  pinned catalog snapshot of the target table
+     * @throws IllegalArgumentException if the snapshot is null, a column is
+     *                                  unknown, or the predicate type mismatches
+     */
+    private void bindDelete(DeleteStatement statement, Catalog snapshot) {
+        bindTableAndWhere(statement.tableName(), statement.where(), snapshot);
+    }
+
+    /**
+     * Validates that the target table exists and any optional WHERE predicate
+     * references an existing column with a matching constant type.
+     *
+     * @param tableName statement's target table name
+     * @param where     optional predicate for filtering rows
+     * @param snapshot  pinned catalog snapshot
+     * @throws IllegalArgumentException if snapshot is invalid, column is unknown,
+     *                                  or constant type does not match column type
+     */
+    private void bindTableAndWhere(String tableName, Optional<Predicate> where, Catalog snapshot) {
+        requireMatchingSnapshot(tableName, snapshot);
+        if (where.isEmpty()) {
             return;
         }
 
-        Predicate predicate = statement.where().get();
-        ColumnSpec matchedColumn = schema.stream()
+        Predicate predicate = where.get();
+        ColumnSpec matchedColumn = snapshot.columnSpecs().stream()
                 .filter(column -> column.name().equals(predicate.columnName()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("unknown column: " + predicate.columnName()));

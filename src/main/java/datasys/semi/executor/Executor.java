@@ -13,6 +13,7 @@ import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
 import datasys.semi.models.CreateTableStatement;
+import datasys.semi.models.DeleteStatement;
 import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
@@ -139,6 +140,35 @@ public final class Executor {
      *                                  statement
      */
     public List<Object[]> executeQuery(String sql) {
+        MDC.put("statementNumber", "1");
+        try {
+            SelectStatement select = parseSingleSelect(sql);
+            long started = System.nanoTime();
+            Catalog snapshot = engine.snapshot(select.tableName());
+            binder.bind(select, snapshot);
+            Operator plan = planner.plan(select, snapshot);
+            ScanStats stats = planner.lastScanStats();
+            List<Object[]> rows = drainToList(plan);
+            logSelectSummary(select.tableName(), rows.size(), stats, started);
+            return rows;
+        } catch (RuntimeException exception) {
+            LOGGER.error("statement_failed operation=SELECT reason={}",
+                    LogSanitizer.sanitize(exception.getMessage()));
+            throw exception;
+        } finally {
+            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
+        }
+    }
+
+    /**
+     * Parses a SQL string and verifies that it yields exactly one SELECT statement.
+     *
+     * @param sql SQL query string to parse
+     * @return the single parsed SelectStatement
+     * @throws IllegalArgumentException if {@code sql} is null or does not yield
+     *                                  exactly one SELECT statement
+     */
+    private SelectStatement parseSingleSelect(String sql) {
         if (sql == null) {
             throw new IllegalArgumentException("sql must not be null");
         }
@@ -147,20 +177,7 @@ public final class Executor {
         if (statements.size() != 1 || !(statements.getFirst() instanceof SelectStatement select)) {
             throw new IllegalArgumentException("expected exactly one SELECT statement");
         }
-
-        MDC.put("statementNumber", "1");
-        long started = System.nanoTime();
-        try {
-            Catalog snapshot = engine.snapshot(select.tableName());
-            binder.bind(select, snapshot);
-            Operator plan = planner.plan(select, snapshot);
-            ScanStats stats = planner.lastScanStats();
-            List<Object[]> rows = drainToList(plan);
-            logSelectSummary(select.tableName(), rows.size(), stats, started);
-            return rows;
-        } finally {
-            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
-        }
+        return select;
     }
 
     /**
@@ -168,8 +185,13 @@ public final class Executor {
      * statement according to its type.
      *
      * @param statement the AST statement to execute
+     * @throws IllegalArgumentException if {@code statement} is null or fails
+     *                                  binding or execution
      */
     private void executeStatement(Statement statement) {
+        if (statement == null) {
+            throw new IllegalArgumentException("statement must not be null");
+        }
         long started = System.nanoTime();
 
         switch (statement) {
@@ -187,6 +209,11 @@ public final class Executor {
                 binder.bind(select, snapshot);
                 executeSelect(select, snapshot, started);
             }
+            case DeleteStatement delete -> {
+                Catalog snapshot = engine.snapshot(delete.tableName());
+                binder.bind(delete, snapshot);
+                executeDelete(delete, snapshot, started);
+            }
         }
     }
 
@@ -197,11 +224,28 @@ public final class Executor {
      * @return operation name string
      */
     private static String resolveOperation(Statement statement) {
+        if (statement == null) {
+            return "UNKNOWN";
+        }
         return switch (statement) {
             case CreateTableStatement _ -> "CREATE_TABLE";
             case CopyStatement _ -> "COPY";
             case SelectStatement _ -> "SELECT";
+            case DeleteStatement _ -> "DELETE";
         };
+    }
+
+    /**
+     * Executes a {@code DELETE} statement against the pinned snapshot.
+     * Stubbed with {@link UnsupportedOperationException} until Exercise 7 §4.
+     *
+     * @param statement DELETE statement
+     * @param snapshot  pinned catalog snapshot at statement start
+     * @param started   nano timestamp when execution started
+     * @throws UnsupportedOperationException always thrown in Exercise 7 §3
+     */
+    private void executeDelete(DeleteStatement statement, Catalog snapshot, long started) {
+        throw new UnsupportedOperationException("DELETE execution is not implemented yet");
     }
 
     /**

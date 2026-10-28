@@ -44,6 +44,7 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
      *
      * @param context the statement context
      * @return parsed AST statement
+     * @throws IllegalStateException if an unsupported statement context is encountered
      */
     @Override
     public Statement visitStatement(SqlParser.StatementContext context) {
@@ -53,7 +54,13 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
         if (context.copy() != null) {
             return (Statement) visit(context.copy());
         }
-        return (Statement) visit(context.select());
+        if (context.select() != null) {
+            return (Statement) visit(context.select());
+        }
+        if (context.delete() != null) {
+            return (Statement) visit(context.delete());
+        }
+        throw new IllegalStateException("unsupported statement context: " + context.getText());
     }
 
     /**
@@ -141,6 +148,21 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
                 ? Optional.of((Predicate) visit(context.predicate()))
                 : Optional.empty();
         return new SelectStatement(tableName, columns, where);
+    }
+
+    /**
+     * Visits a DELETE parse tree node.
+     *
+     * @param context the delete context
+     * @return DeleteStatement AST record
+     */
+    @Override
+    public DeleteStatement visitDelete(SqlParser.DeleteContext context) {
+        String tableName = context.IDENTIFIER().getText();
+        Optional<Predicate> where = context.predicate() != null
+                ? Optional.of((Predicate) visit(context.predicate()))
+                : Optional.empty();
+        return new DeleteStatement(tableName, where);
     }
 
     /**

@@ -159,4 +159,3 @@ mvn -B verify
 - Copy-on-write rewrite, the public pruning helper, and per-version reader refcounts (7.4).
 - Orphan-partition garbage collection beyond failed-`COPY` cleanup.
 - Concurrent-writer conflict handling (Exercise 8).
-

@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -25,7 +26,9 @@ import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.executor.Executor;
 import datasys.semi.models.SelectStatement;
+import datasys.semi.models.Statement;
 import datasys.semi.operators.Operator;
+import datasys.semi.parser.SqlParseException;
 import datasys.semi.planner.Planner;
 
 class ExecutorTest {
@@ -240,5 +243,166 @@ class ExecutorTest {
         assertThrows(IllegalStateException.class,
                 () -> engine.copyFile(staleSnapshotV0, csvFile.toString()));
         assertEquals(1L, engine.snapshot("trips").version());
+    }
+
+    /**
+     * Verifies that a failing DELETE statement in a script emits an ERROR log
+     * with operation=DELETE, resets MDC statementNumber, and emits zero bytes to output.
+     */
+    @Test
+    void deleteBindingFailureLogsStatementFailedAndLeavesOutputEmpty() throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        PrintStream output = new PrintStream(buffer, true, StandardCharsets.UTF_8);
+        Executor executor = new Executor(engine, output);
+
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        String script = "CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);\nDELETE FROM missing_table;";
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> executor.execute(script));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        assertEquals("0", MDC.get("statementNumber"));
+        assertEquals(0, buffer.size(), "stdout must remain completely empty for DELETE");
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        boolean hasFailedError = logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .anyMatch(line -> line.contains(",2,") && line.contains(",ERROR,")
+                        && line.contains("statement_failed operation=DELETE reason=unknown table: missing_table"));
+        assertTrue(hasFailedError, "expected ERROR line with active statementNumber 2 and statement_failed operation=DELETE");
+    }
+
+    /**
+     * Verifies that valid DELETE statement reaching the front-end execution boundary
+     * throws UnsupportedOperationException in Exercise 7 §3, logs statement_failed at ERROR,
+     * and leaves output empty.
+     */
+    @Test
+    void deleteExecutionThrowsUnsupportedOperationExceptionAndLogsStatementFailed() throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        PrintStream output = new PrintStream(buffer, true, StandardCharsets.UTF_8);
+        Executor executor = new Executor(engine, output);
+
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        String script = """
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                DELETE FROM trips WHERE distance > 100;
+                """;
+
+        try {
+            UnsupportedOperationException exception = assertThrows(UnsupportedOperationException.class,
+                    () -> executor.execute(script));
+            assertEquals("DELETE execution is not implemented yet", exception.getMessage());
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        assertEquals("0", MDC.get("statementNumber"));
+        assertEquals(0, buffer.size(), "stdout must remain completely empty for DELETE");
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        boolean hasFailedError = logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .anyMatch(line -> line.contains(",2,") && line.contains(",ERROR,")
+                        && line.contains("statement_failed operation=DELETE reason=DELETE execution is not implemented yet"));
+        assertTrue(hasFailedError, "expected ERROR line with active statementNumber 2 and UnsupportedOperationException reason");
+    }
+
+    /**
+     * Verifies that executeQuery rejects DELETE statements because it expects a single SELECT.
+     */
+    @Test
+    void executeQueryRejectsDeleteStatement() {
+        Executor executor = new Executor(engine);
+        assertThrows(IllegalArgumentException.class, () -> executor.executeQuery("DELETE FROM trips;"));
+    }
+
+    /**
+     * Verifies that executing a list with a null element throws IllegalArgumentException,
+     * resolves operation name as UNKNOWN, and records an ERROR line without NPE.
+     */
+    @Test
+    void executeListWithNullElementLogsErrorAndThrowsIllegalArgumentException() throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        PrintStream output = new PrintStream(buffer, true, StandardCharsets.UTF_8);
+        Executor executor = new Executor(engine, output);
+
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        List<Statement> statementsWithNull = Collections.singletonList(null);
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> executor.execute(statementsWithNull));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        assertEquals("0", MDC.get("statementNumber"));
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        boolean hasFailedError = logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .anyMatch(line -> line.contains(",1,") && line.contains(",ERROR,")
+                        && line.contains("statement_failed operation=UNKNOWN reason=statement must not be null"));
+        assertTrue(hasFailedError, "expected ERROR line with statement_failed operation=UNKNOWN");
+    }
+
+    /**
+     * Verifies that executeQuery, as a logging boundary, records exactly one
+     * statement_failed ERROR line under statementNumber 1 when it rejects a
+     * non-SELECT query, and resets statementNumber to 0 afterwards.
+     */
+    @Test
+    void executeQueryRejectsNonSelectAndLogsStatementFailedOnce() throws IOException {
+        Executor executor = new Executor(engine);
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+
+        try {
+            assertThrows(IllegalArgumentException.class, () -> executor.executeQuery("DELETE FROM trips;"));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        assertEquals("0", MDC.get("statementNumber"));
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        List<String> errorLines = logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .filter(line -> line.contains(",ERROR,"))
+                .toList();
+        assertEquals(1, errorLines.size(), "expected exactly one ERROR line, logged at the boundary");
+        assertTrue(errorLines.getFirst().contains("," + session + ",1,")
+                && errorLines.getFirst().contains(
+                        "statement_failed operation=SELECT reason=expected exactly one SELECT statement"),
+                "expected statement_failed ERROR line with statementNumber 1");
+    }
+
+    /**
+     * Verifies that execute(String) defaults a missing MDC statementNumber to 0,
+     * so a script-level parse failure is logged with a numeric statementNumber
+     * rather than an empty field.
+     */
+    @Test
+    void parseFailureWithoutStatementNumberInMdcIsLoggedWithStatementNumberZero() throws IOException {
+        Executor executor = new Executor(engine);
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        MDC.remove("statementNumber");
+
+        try {
+            assertThrows(SqlParseException.class, () -> executor.execute("SELEC * FROM trips;"));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        boolean hasParseFailure = logLines.stream()
+                .filter(line -> line.contains("," + session + ",0,"))
+                .anyMatch(line -> line.contains(",ERROR,") && line.contains("failed line=1 col="));
+        assertTrue(hasParseFailure, "expected parser ERROR line with statementNumber 0");
     }
 }
