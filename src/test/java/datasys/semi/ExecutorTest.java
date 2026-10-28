@@ -277,12 +277,38 @@ class ExecutorTest {
     }
 
     /**
-     * Verifies that valid DELETE statement reaching the front-end execution boundary
-     * throws UnsupportedOperationException in Exercise 7 §3, logs statement_failed at ERROR,
-     * and leaves output empty.
+     * Required Test 3: CREATE, COPY, COPY, DELETE produce versions 0 through 3 and
+     * a SELECT after each commit sees exactly that commit's rows.
      */
     @Test
-    void deleteExecutionThrowsUnsupportedOperationExceptionAndLogsStatementFailed() throws IOException {
+    void createCopyCopyDeleteProduceVersionsZeroThroughThree() {
+        Executor executor = new Executor(engine);
+        executor.execute("CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);");
+        assertEquals(0L, engine.snapshot("trips").version());
+        assertEquals(0, executor.executeQuery("SELECT * FROM trips;").size());
+
+        executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
+        assertEquals(1L, engine.snapshot("trips").version());
+        assertEquals(8, executor.executeQuery("SELECT * FROM trips;").size());
+
+        executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
+        assertEquals(2L, engine.snapshot("trips").version());
+        assertEquals(16, executor.executeQuery("SELECT * FROM trips;").size());
+
+        executor.execute("DELETE FROM trips WHERE city = 'Copenhagen';");
+        assertEquals(3L, engine.snapshot("trips").version());
+        List<Object[]> remaining = executor.executeQuery("SELECT * FROM trips;");
+        assertEquals(10, remaining.size());
+        assertTrue(remaining.stream().noneMatch(row -> row[0].equals("Copenhagen")));
+        assertEquals(0, engine.pinnedReaderCount("trips", 3L));
+    }
+
+    /**
+     * Verifies that a DELETE writes nothing to stdout and logs its summary line
+     * with the committed version and partition counts.
+     */
+    @Test
+    void deleteLogsSummaryLineWithVersionAndWritesNothingToStdout() throws IOException {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         PrintStream output = new PrintStream(buffer, true, StandardCharsets.UTF_8);
         Executor executor = new Executor(engine, output);
@@ -291,26 +317,22 @@ class ExecutorTest {
         MDC.put("sessionId", session);
         String script = """
                 CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
-                DELETE FROM trips WHERE distance > 100;
-                """;
-
+                COPY trips FROM '%s';
+                DELETE FROM trips;
+                """.formatted(csvFile.toString());
         try {
-            UnsupportedOperationException exception = assertThrows(UnsupportedOperationException.class,
-                    () -> executor.execute(script));
-            assertEquals("DELETE execution is not implemented yet", exception.getMessage());
+            executor.execute(script);
         } finally {
             MDC.remove("sessionId");
         }
 
-        assertEquals("0", MDC.get("statementNumber"));
         assertEquals(0, buffer.size(), "stdout must remain completely empty for DELETE");
-
         List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
-        boolean hasFailedError = logLines.stream()
+        boolean hasSummary = logLines.stream()
                 .filter(line -> line.contains("," + session + ","))
-                .anyMatch(line -> line.contains(",2,") && line.contains(",ERROR,")
-                        && line.contains("statement_failed operation=DELETE reason=DELETE execution is not implemented yet"));
-        assertTrue(hasFailedError, "expected ERROR line with active statementNumber 2 and UnsupportedOperationException reason");
+                .anyMatch(line -> line.contains(",3,") && line.contains(",DEBUG,") && line.contains(
+                        "statement=DELETE table=trips rowsDeleted=8 partitionsRewritten=4 partitionsCarried=0 version=2 durationMs="));
+        assertTrue(hasSummary, "expected DELETE summary line with version=2");
     }
 
     /**

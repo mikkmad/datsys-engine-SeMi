@@ -3,12 +3,14 @@ package datasys.semi.executor;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 import datasys.semi.engine.CopyResult;
+import datasys.semi.engine.DeleteResult;
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
@@ -20,6 +22,7 @@ import datasys.semi.models.Statement;
 import datasys.semi.operators.Operator;
 import datasys.semi.parser.Binder;
 import datasys.semi.parser.SqlParser;
+import datasys.semi.planner.DeletePlan;
 import datasys.semi.planner.Planner;
 import datasys.semi.util.LogSanitizer;
 
@@ -29,8 +32,9 @@ import datasys.semi.util.LogSanitizer;
  *
  * <p>
  * Maintains statement sequencing in the SLF4J MDC ({@code statementNumber}),
- * pins a {@link Catalog} snapshot at statement start before binding, dispatches
- * DDL and COPY statements to the storage engine, and runs SELECT statements as
+ * pins a {@link Catalog} snapshot at statement start before binding and
+ * releases it when the statement ends, dispatches DDL, COPY and DELETE
+ * statements to the storage engine, and runs SELECT statements as
  * Volcano operator pipelines. Output from SELECT is emitted as headerless CSV
  * to the configured output stream. Execution halts immediately upon
  * encountering any error.
@@ -144,13 +148,17 @@ public final class Executor {
         try {
             SelectStatement select = parseSingleSelect(sql);
             long started = System.nanoTime();
-            Catalog snapshot = engine.snapshot(select.tableName());
-            binder.bind(select, snapshot);
-            Operator plan = planner.plan(select, snapshot);
-            ScanStats stats = planner.lastScanStats();
-            List<Object[]> rows = drainToList(plan);
-            logSelectSummary(select.tableName(), rows.size(), stats, started);
-            return rows;
+            Catalog snapshot = engine.pinSnapshot(select.tableName());
+            try {
+                binder.bind(select, snapshot);
+                Operator plan = planner.plan(select, snapshot);
+                ScanStats stats = planner.lastScanStats();
+                List<Object[]> rows = drainToList(plan);
+                logSelectSummary(select.tableName(), rows.size(), stats, started);
+                return rows;
+            } finally {
+                engine.releaseSnapshot(snapshot);
+            }
         } catch (RuntimeException exception) {
             LOGGER.error("statement_failed operation=SELECT reason={}",
                     LogSanitizer.sanitize(exception.getMessage()));
@@ -199,21 +207,36 @@ public final class Executor {
                 binder.bind(createTable);
                 executeCreateTable(createTable, started);
             }
-            case CopyStatement copy -> {
-                Catalog snapshot = engine.snapshot(copy.tableName());
+            case CopyStatement copy -> runPinned(copy.tableName(), snapshot -> {
                 binder.bind(copy, snapshot);
                 executeCopy(copy, snapshot, started);
-            }
-            case SelectStatement select -> {
-                Catalog snapshot = engine.snapshot(select.tableName());
+            });
+            case SelectStatement select -> runPinned(select.tableName(), snapshot -> {
                 binder.bind(select, snapshot);
                 executeSelect(select, snapshot, started);
-            }
-            case DeleteStatement delete -> {
-                Catalog snapshot = engine.snapshot(delete.tableName());
+            });
+            case DeleteStatement delete -> runPinned(delete.tableName(), snapshot -> {
                 binder.bind(delete, snapshot);
                 executeDelete(delete, snapshot, started);
-            }
+            });
+        }
+    }
+
+    /**
+     * Pins the table's current catalog version, runs {@code action} against it,
+     * and releases the pin when the action completes or fails, so the version's
+     * partition files stay on disk for the whole statement.
+     *
+     * @param tableName table whose current version is pinned
+     * @param action    statement body executed against the pinned snapshot
+     * @throws IllegalArgumentException if the table does not exist
+     */
+    private void runPinned(String tableName, Consumer<Catalog> action) {
+        Catalog snapshot = engine.pinSnapshot(tableName);
+        try {
+            action.accept(snapshot);
+        } finally {
+            engine.releaseSnapshot(snapshot);
         }
     }
 
@@ -236,16 +259,21 @@ public final class Executor {
     }
 
     /**
-     * Executes a {@code DELETE} statement against the pinned snapshot.
-     * Stubbed with {@link UnsupportedOperationException} until Exercise 7 §4.
+     * Executes a copy-on-write {@code DELETE} statement against the pinned snapshot
+     * and logs the committed version and partition counts. Writes nothing to the
+     * output stream.
      *
      * @param statement DELETE statement
      * @param snapshot  pinned catalog snapshot at statement start
      * @param started   nano timestamp when execution started
-     * @throws UnsupportedOperationException always thrown in Exercise 7 §3
      */
     private void executeDelete(DeleteStatement statement, Catalog snapshot, long started) {
-        throw new UnsupportedOperationException("DELETE execution is not implemented yet");
+        DeletePlan plan = planner.planDelete(statement, snapshot);
+        DeleteResult result = engine.deleteRows(snapshot, plan.rewriteSet(), plan.rowMatcher());
+        LOGGER.debug(
+                "statement=DELETE table={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} version={} durationMs={}",
+                statement.tableName(), result.rowsDeleted(), result.partitionsRewritten(),
+                result.partitionsCarried(), result.version(), elapsedMillis(started));
     }
 
     /**
