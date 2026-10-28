@@ -69,11 +69,9 @@ public final class Executor {
      */
     public Executor(StorageEngine engine, PrintStream output) {
         if (engine == null) {
-            LOGGER.error("engine must not be null");
             throw new IllegalArgumentException("engine must not be null");
         }
         if (output == null) {
-            LOGGER.error("output must not be null");
             throw new IllegalArgumentException("output must not be null");
         }
 
@@ -92,8 +90,10 @@ public final class Executor {
      */
     public void execute(String sql) {
         if (sql == null) {
-            LOGGER.error("sql must not be null");
             throw new IllegalArgumentException("sql must not be null");
+        }
+        if (MDC.get("statementNumber") == null) {
+            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
 
         List<Statement> statements = parser.parse(sql);
@@ -109,7 +109,6 @@ public final class Executor {
      */
     public void execute(List<Statement> statements) {
         if (statements == null) {
-            LOGGER.error("statements must not be null");
             throw new IllegalArgumentException("statements must not be null");
         }
 
@@ -141,10 +140,10 @@ public final class Executor {
      *                                  statement
      */
     public List<Object[]> executeQuery(String sql) {
-        SelectStatement select = parseSingleSelect(sql);
         MDC.put("statementNumber", "1");
-        long started = System.nanoTime();
         try {
+            SelectStatement select = parseSingleSelect(sql);
+            long started = System.nanoTime();
             Catalog snapshot = engine.snapshot(select.tableName());
             binder.bind(select, snapshot);
             Operator plan = planner.plan(select, snapshot);
@@ -171,13 +170,11 @@ public final class Executor {
      */
     private SelectStatement parseSingleSelect(String sql) {
         if (sql == null) {
-            LOGGER.error("sql must not be null");
             throw new IllegalArgumentException("sql must not be null");
         }
 
         List<Statement> statements = parser.parse(sql);
         if (statements.size() != 1 || !(statements.getFirst() instanceof SelectStatement select)) {
-            LOGGER.error("expected exactly one SELECT statement");
             throw new IllegalArgumentException("expected exactly one SELECT statement");
         }
         return select;

@@ -3,19 +3,12 @@ package datasys.semi.parser;
 import java.math.BigDecimal;
 import java.util.stream.Collectors;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import datasys.semi.models.*;
-import datasys.semi.util.LogSanitizer;
 
 /**
  * Pretty-printer rendering AST Statement records back to canonical SQL text.
  */
 public final class SqlPrinter {
-
-    // --- Constants ---
-    private static final Logger LOGGER = LoggerFactory.getLogger(SqlPrinter.class);
 
     /**
      * Constructs a new SqlPrinter.
@@ -33,7 +26,7 @@ public final class SqlPrinter {
      */
     public String print(Statement statement) {
         if (statement == null) {
-            throw fail("statement must not be null");
+            throw new IllegalArgumentException("statement must not be null");
         }
 
         return switch (statement) {
@@ -141,7 +134,7 @@ public final class SqlPrinter {
             case String stringValue -> formatString(stringValue);
             case Long longValue -> Long.toString(longValue);
             case Double doubleValue -> formatDouble(doubleValue);
-            default -> throw fail("unsupported constant type: " + constant);
+            default -> throw new IllegalArgumentException("unsupported constant type: " + constant);
         };
     }
 
@@ -154,7 +147,8 @@ public final class SqlPrinter {
      */
     private static String formatString(String value) {
         if (value.contains("'") || value.contains("\r") || value.contains("\n")) {
-            throw fail("string contains characters that cannot be represented in SQL literal: " + value);
+            throw new IllegalArgumentException(
+                    "string contains characters that cannot be represented in SQL literal: " + value);
         }
         return "'" + value + "'";
     }
@@ -172,7 +166,7 @@ public final class SqlPrinter {
      */
     private String formatDouble(double value) {
         if (!Double.isFinite(value)) {
-            throw fail("non-finite double has no SQL literal: " + value);
+            throw new IllegalArgumentException("non-finite double has no SQL literal: " + value);
         }
 
         String shortestText = Double.toString(value);
@@ -182,17 +176,5 @@ public final class SqlPrinter {
 
         String plainText = new BigDecimal(shortestText).toPlainString();
         return plainText.contains(".") ? plainText : plainText + ".0";
-    }
-
-    /**
-     * Logs a printing failure at ERROR level and constructs an
-     * {@link IllegalArgumentException}.
-     *
-     * @param message failure message describing the unrepresentable AST input
-     * @return constructed IllegalArgumentException
-     */
-    private static IllegalArgumentException fail(String message) {
-        LOGGER.error("print_failed reason={}", LogSanitizer.sanitize(message));
-        return new IllegalArgumentException(message);
     }
 }

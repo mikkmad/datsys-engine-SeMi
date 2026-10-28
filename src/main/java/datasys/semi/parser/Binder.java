@@ -5,9 +5,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
@@ -18,16 +15,12 @@ import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
-import datasys.semi.util.LogSanitizer;
 
 /**
  * Validates AST statements against a pinned {@link Catalog} snapshot or
  * table-creation schema rules.
  */
 public final class Binder {
-
-    // --- Constants ---
-    private static final Logger LOGGER = LoggerFactory.getLogger(Binder.class);
 
     // --- Collaborators ---
     private final StorageEngine engine;
@@ -41,7 +34,7 @@ public final class Binder {
      */
     public Binder(StorageEngine engine) {
         if (engine == null) {
-            throw fail("engine must not be null");
+            throw new IllegalArgumentException("engine must not be null");
         }
         this.engine = engine;
     }
@@ -56,7 +49,7 @@ public final class Binder {
      */
     public void bind(Statement statement) {
         if (statement == null) {
-            throw fail("statement must not be null");
+            throw new IllegalArgumentException("statement must not be null");
         }
 
         switch (statement) {
@@ -77,7 +70,7 @@ public final class Binder {
      */
     public void bind(Statement statement, Catalog snapshot) {
         if (statement == null) {
-            throw fail("statement must not be null");
+            throw new IllegalArgumentException("statement must not be null");
         }
 
         switch (statement) {
@@ -98,16 +91,16 @@ public final class Binder {
     private void bindCreateTable(CreateTableStatement statement) {
         List<ColumnSpec> columns = statement.columns();
         if (columns == null || columns.isEmpty()) {
-            throw fail("column list must not be empty");
+            throw new IllegalArgumentException("column list must not be empty");
         }
 
         Set<String> seenColumnNames = new HashSet<>();
         for (ColumnSpec column : columns) {
             if (column == null || column.name() == null || column.name().isBlank()) {
-                throw fail("invalid column specification");
+                throw new IllegalArgumentException("invalid column specification");
             }
             if (!seenColumnNames.add(column.name())) {
-                throw fail("duplicate column name: " + column.name());
+                throw new IllegalArgumentException("duplicate column name: " + column.name());
             }
         }
     }
@@ -170,7 +163,7 @@ public final class Binder {
         ColumnSpec matchedColumn = snapshot.columnSpecs().stream()
                 .filter(column -> column.name().equals(predicate.columnName()))
                 .findFirst()
-                .orElseThrow(() -> fail("unknown column: " + predicate.columnName()));
+                .orElseThrow(() -> new IllegalArgumentException("unknown column: " + predicate.columnName()));
 
         validatePredicateType(matchedColumn.type(), predicate.constant());
     }
@@ -185,7 +178,7 @@ public final class Binder {
      */
     private static void requireMatchingSnapshot(String tableName, Catalog snapshot) {
         if (snapshot == null || !snapshot.table().equals(tableName)) {
-            throw fail("unknown table: " + tableName);
+            throw new IllegalArgumentException("unknown table: " + tableName);
         }
     }
 
@@ -206,19 +199,7 @@ public final class Binder {
         };
 
         if (!valid) {
-            throw fail("constant type does not match column type: " + columnType);
+            throw new IllegalArgumentException("constant type does not match column type: " + columnType);
         }
-    }
-
-    /**
-     * Logs validation failure at ERROR level and constructs an
-     * {@link IllegalArgumentException}.
-     *
-     * @param message failure message describing the validation violation
-     * @return constructed IllegalArgumentException
-     */
-    private static IllegalArgumentException fail(String message) {
-        LOGGER.error("bind_failed reason={}", LogSanitizer.sanitize(message));
-        return new IllegalArgumentException(message);
     }
 }

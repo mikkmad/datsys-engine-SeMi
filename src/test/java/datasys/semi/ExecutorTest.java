@@ -28,6 +28,7 @@ import datasys.semi.executor.Executor;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
 import datasys.semi.operators.Operator;
+import datasys.semi.parser.SqlParseException;
 import datasys.semi.planner.Planner;
 
 class ExecutorTest {
@@ -351,10 +352,12 @@ class ExecutorTest {
     }
 
     /**
-     * Verifies that direct executeQuery call rejecting non-SELECT statement logs an ERROR.
+     * Verifies that executeQuery, as a logging boundary, records exactly one
+     * statement_failed ERROR line under statementNumber 1 when it rejects a
+     * non-SELECT query, and resets statementNumber to 0 afterwards.
      */
     @Test
-    void executeQueryRejectsNonSelectAndLogsError() throws IOException {
+    void executeQueryRejectsNonSelectAndLogsStatementFailedOnce() throws IOException {
         Executor executor = new Executor(engine);
         String session = UUID.randomUUID().toString();
         MDC.put("sessionId", session);
@@ -367,10 +370,39 @@ class ExecutorTest {
 
         assertEquals("0", MDC.get("statementNumber"));
         List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
-        boolean hasError = logLines.stream()
+        List<String> errorLines = logLines.stream()
+                .filter(line -> line.contains("," + session + ","))
+                .filter(line -> line.contains(",ERROR,"))
+                .toList();
+        assertEquals(1, errorLines.size(), "expected exactly one ERROR line, logged at the boundary");
+        assertTrue(errorLines.getFirst().contains("," + session + ",1,")
+                && errorLines.getFirst().contains(
+                        "statement_failed operation=SELECT reason=expected exactly one SELECT statement"),
+                "expected statement_failed ERROR line with statementNumber 1");
+    }
+
+    /**
+     * Verifies that execute(String) defaults a missing MDC statementNumber to 0,
+     * so a script-level parse failure is logged with a numeric statementNumber
+     * rather than an empty field.
+     */
+    @Test
+    void parseFailureWithoutStatementNumberInMdcIsLoggedWithStatementNumberZero() throws IOException {
+        Executor executor = new Executor(engine);
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        MDC.remove("statementNumber");
+
+        try {
+            assertThrows(SqlParseException.class, () -> executor.execute("SELEC * FROM trips;"));
+        } finally {
+            MDC.remove("sessionId");
+        }
+
+        List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
+        boolean hasParseFailure = logLines.stream()
                 .filter(line -> line.contains("," + session + ",0,"))
-                .anyMatch(line -> line.contains(",ERROR,")
-                        && line.contains("expected exactly one SELECT statement"));
-        assertTrue(hasError, "expected ERROR log with statementNumber 0 for rejected non-SELECT query");
+                .anyMatch(line -> line.contains(",ERROR,") && line.contains("failed line=1 col="));
+        assertTrue(hasParseFailure, "expected parser ERROR line with statementNumber 0");
     }
 }

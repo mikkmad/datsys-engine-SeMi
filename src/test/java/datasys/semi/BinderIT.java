@@ -1,6 +1,8 @@
 package datasys.semi;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -236,8 +238,13 @@ class BinderIT {
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(emptyCols));
         }
 
+        /**
+         * Verifies that a bind failure throws an IllegalArgumentException naming the
+         * unknown column without writing an ERROR line itself; the ERROR line is
+         * owned by the Executor boundary (see ExecutorTest).
+         */
         @Test
-        void bindFailureLogsBindFailedAtErrorLevel(@TempDir Path tempDir) throws IOException {
+        void bindFailureThrowsWithoutLoggingAtThrowSite(@TempDir Path tempDir) throws IOException {
                 StorageEngine engine = new StorageEngine(tempDir);
                 engine.createTable("trips", TRIPS_SCHEMA);
                 Binder binder = new Binder(engine);
@@ -247,15 +254,17 @@ class BinderIT {
                 try {
                         DeleteStatement invalidCol = new DeleteStatement("trips", Optional.of(
                                         new Predicate("missing_column", Comparison.EQUALS, 1L)));
-                        assertThrows(IllegalArgumentException.class, () -> binder.bind(invalidCol));
+                        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                                        () -> binder.bind(invalidCol));
+                        assertEquals("unknown column: missing_column", exception.getMessage());
                 } finally {
                         MDC.remove("sessionId");
                 }
 
                 List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
-                boolean hasBindFailed = logLines.stream()
-                                .filter(line -> line.contains("," + session + ",0,"))
-                                .anyMatch(line -> line.contains(",ERROR,") && line.contains("bind_failed reason=unknown column: missing_column"));
-                assertTrue(hasBindFailed, "expected ERROR line with statementNumber 0 and bind_failed message");
+                boolean hasErrorLine = logLines.stream()
+                                .filter(line -> line.contains("," + session + ","))
+                                .anyMatch(line -> line.contains(",ERROR,"));
+                assertFalse(hasErrorLine, "Binder must not log at the throw site");
         }
 }

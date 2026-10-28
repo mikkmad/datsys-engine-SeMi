@@ -127,12 +127,10 @@ public final class StorageEngine {
      */
     public Catalog snapshot(String tableName) {
         if (tableName == null) {
-            LOGGER.error("api=snapshot error=table name must not be null");
             throw new IllegalArgumentException("unknown table: null");
         }
         Catalog catalog = catalogs.get(tableName);
         if (catalog == null) {
-            LOGGER.error("api=snapshot table={} error=unknown table", LogSanitizer.sanitize(tableName));
             throw new IllegalArgumentException("unknown table: " + tableName);
         }
         return catalog;
@@ -182,7 +180,6 @@ public final class StorageEngine {
      */
     public CopyResult copyFile(Catalog snapshot, String csvFilePath) {
         if (snapshot == null) {
-            LOGGER.error("api=copyFile error=snapshot must not be null");
             throw new IllegalArgumentException("snapshot must not be null");
         }
         String tableName = snapshot.table();
@@ -227,7 +224,6 @@ public final class StorageEngine {
      */
     public void commitCatalog(Catalog base, Catalog next) {
         if (next == null) {
-            LOGGER.error("api=commitCatalog error=next catalog must not be null");
             throw new IllegalArgumentException("next catalog must not be null");
         }
 
@@ -260,8 +256,6 @@ public final class StorageEngine {
     public Catalog readCatalogVersion(String tableName, long version) {
         Path path = catalogsDirectory.resolve(catalogFileName(tableName, version));
         if (!Files.exists(path)) {
-            LOGGER.error("api=readCatalogVersion table={} version={} error=version no longer available",
-                    LogSanitizer.sanitize(tableName), version);
             throw new IllegalStateException(
                     "version " + version + " of table " + tableName + " is no longer available");
         }
@@ -289,7 +283,6 @@ public final class StorageEngine {
      */
     public List<Object[]> readPartition(Catalog snapshot, Partition partition) {
         if (snapshot == null || partition == null) {
-            LOGGER.error("api=readPartition error=snapshot and partition must not be null");
             throw new IllegalArgumentException("snapshot and partition must not be null");
         }
 
@@ -831,15 +824,12 @@ public final class StorageEngine {
     private static void validateCommitBase(String tableName, Catalog base, Catalog current) {
         if (base == null) {
             if (current != null) {
-                LOGGER.error("api=commitCatalog table={} error=table already exists", tableName);
                 throw new IllegalArgumentException("table already exists: " + tableName);
             }
             return;
         }
         if (current == null || current.version() != base.version()) {
             long currentVersion = current == null ? -1L : current.version();
-            LOGGER.error("api=commitCatalog table={} baseVersion={} currentVersion={} error=stale base version",
-                    tableName, base.version(), currentVersion);
             throw new IllegalStateException(
                     "stale base version for table " + tableName + ": expected " + base.version() + " but found "
                             + currentVersion);
@@ -857,7 +847,6 @@ public final class StorageEngine {
      */
     private static List<Column> validateAndConvertColumns(List<ColumnSpec> columns) {
         if (columns == null || columns.isEmpty()) {
-            LOGGER.error("api=createTable error=column list must not be empty");
             throw new IllegalArgumentException("column list must not be empty");
         }
 
@@ -865,7 +854,6 @@ public final class StorageEngine {
         for (ColumnSpec column : columns) {
             if (column == null || column.name() == null || column.name().isBlank() || column.type() == null
                     || schema.stream().anyMatch(existing -> existing.name().equals(column.name()))) {
-                LOGGER.error("api=createTable error=invalid or duplicate column");
                 throw new IllegalArgumentException("invalid or duplicate column");
             }
             schema.add(new Column(column.name(), column.type().name()));
@@ -883,8 +871,7 @@ public final class StorageEngine {
     private static void requireTableName(String tableName) {
         if (tableName == null || tableName.isBlank() || tableName.contains("/") || tableName.contains("\\")
                 || tableName.equals(".") || tableName.equals("..")) {
-            LOGGER.error("api=requireTableName table={} error=invalid table name", LogSanitizer.sanitize(tableName));
-            throw new IllegalArgumentException("invalid table name");
+            throw new IllegalArgumentException("invalid table name: " + tableName);
         }
     }
 
