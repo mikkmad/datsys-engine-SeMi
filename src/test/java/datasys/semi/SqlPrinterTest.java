@@ -62,6 +62,13 @@ class SqlPrinterTest {
         }
 
         @Test
+        void roundTripDeleteStatementsWithoutWhere() {
+                DeleteStatement deleteAll = new DeleteStatement("trips", Optional.empty());
+                assertEquals("DELETE FROM trips;", printer.print(deleteAll));
+                assertRoundTrip(deleteAll);
+        }
+
+        @Test
         void roundTripSelectStatementsWithWhereComparisonsAndTypes() {
                 // String EQUALS
                 SelectStatement strEquals = new SelectStatement("trips", Optional.empty(), Optional.of(
@@ -172,6 +179,62 @@ class SqlPrinterTest {
                 for (double value : List.of(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
                         assertThrows(IllegalArgumentException.class, () -> printer.print(selectWithPrice(value)));
                 }
+        }
+
+        @Test
+        void roundTripDeleteStatementsWithWhereComparisonsAndTypes() {
+                // String comparisons
+                assertRoundTrip(deleteWithPredicate(new Predicate("city", Comparison.EQUALS, "Copenhagen")));
+                assertRoundTrip(deleteWithPredicate(new Predicate("city", Comparison.LESS_THAN, "Odense")));
+                assertRoundTrip(deleteWithPredicate(new Predicate("city", Comparison.GREATER_THAN, "Aalborg")));
+
+                // Long comparisons & boundaries
+                assertRoundTrip(deleteWithPredicate(new Predicate("distance", Comparison.EQUALS, 100L)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("distance", Comparison.LESS_THAN, -50L)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("distance", Comparison.GREATER_THAN, 0L)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("distance", Comparison.EQUALS, Long.MIN_VALUE)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("distance", Comparison.EQUALS, Long.MAX_VALUE)));
+
+                // Double comparisons & boundaries
+                assertRoundTrip(deleteWithPredicate(new Predicate("price", Comparison.EQUALS, 99.99)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("price", Comparison.LESS_THAN, -12.5)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("price", Comparison.GREATER_THAN, 300.0)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("price", Comparison.EQUALS, -0.0)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("price", Comparison.EQUALS, 0.0)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("price", Comparison.EQUALS, Double.MIN_VALUE)));
+                assertRoundTrip(deleteWithPredicate(new Predicate("price", Comparison.EQUALS, Double.MAX_VALUE)));
+
+                // Non-finite doubles rejected for DELETE
+                for (double value : List.of(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
+                        assertThrows(IllegalArgumentException.class,
+                                        () -> printer.print(deleteWithPredicate(new Predicate("price", Comparison.EQUALS, value))));
+                }
+        }
+
+        @Test
+        void unprintableStringLiteralsAreRejectedByPrinter() {
+                // Single-quote in string literal
+                DeleteStatement deleteQuote = deleteWithPredicate(new Predicate("city", Comparison.EQUALS, "a'b"));
+                assertThrows(IllegalArgumentException.class, () -> printer.print(deleteQuote));
+
+                SelectStatement selectQuote = new SelectStatement("trips", Optional.empty(), Optional.of(
+                                new Predicate("city", Comparison.EQUALS, "a'b")));
+                assertThrows(IllegalArgumentException.class, () -> printer.print(selectQuote));
+
+                // Newlines in string literal
+                DeleteStatement deleteNewline = deleteWithPredicate(new Predicate("city", Comparison.EQUALS, "a\nb"));
+                assertThrows(IllegalArgumentException.class, () -> printer.print(deleteNewline));
+
+                DeleteStatement deleteReturn = deleteWithPredicate(new Predicate("city", Comparison.EQUALS, "a\rb"));
+                assertThrows(IllegalArgumentException.class, () -> printer.print(deleteReturn));
+
+                // Copy statement with unprintable csvFilePath
+                CopyStatement copyQuote = new CopyStatement("trips", "data/'trips'.csv");
+                assertThrows(IllegalArgumentException.class, () -> printer.print(copyQuote));
+        }
+
+        private DeleteStatement deleteWithPredicate(Predicate predicate) {
+                return new DeleteStatement("trips", Optional.of(predicate));
         }
 
         private SelectStatement selectWithPrice(double price) {

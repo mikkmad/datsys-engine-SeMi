@@ -3,35 +3,41 @@ package datasys.semi.executor;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import datasys.semi.engine.CopyResult;
+import datasys.semi.engine.DeleteResult;
 import datasys.semi.engine.StorageEngine;
+import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
 import datasys.semi.models.CreateTableStatement;
+import datasys.semi.models.DeleteStatement;
+import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
 import datasys.semi.operators.Operator;
 import datasys.semi.parser.Binder;
 import datasys.semi.parser.SqlParser;
+import datasys.semi.planner.DeletePlan;
 import datasys.semi.planner.Planner;
 import datasys.semi.util.LogSanitizer;
 
 /**
- * Orchestrates statement-by-statement execution through parse, bind, plan, and
- * execute.
+ * Orchestrates statement-by-statement execution through snapshot pinning,
+ * parse, bind, plan, and execute.
  *
  * <p>
  * Maintains statement sequencing in the SLF4J MDC ({@code statementNumber}),
- * dispatching DDL and COPY statements directly to the storage engine while
- * running
- * SELECT statements as Volcano operator pipelines. Output from SELECT is
- * emitted
- * as headerless CSV to the configured output stream. Execution halts
- * immediately
- * upon encountering any error.
+ * pins a {@link Catalog} snapshot at statement start before binding and
+ * releases it when the statement ends, dispatches DDL, COPY and DELETE
+ * statements to the storage engine, and runs SELECT statements as
+ * Volcano operator pipelines. Output from SELECT is emitted as headerless CSV
+ * to the configured output stream. Execution halts immediately upon
+ * encountering any error.
  */
 public final class Executor {
 
@@ -52,7 +58,7 @@ public final class Executor {
      * Constructs an Executor writing SELECT CSV output to standard output.
      *
      * @param engine storage engine backing tables and catalogs
-     * @throws IllegalArgumentException if engine is null
+     * @throws IllegalArgumentException if {@code engine} is null
      */
     public Executor(StorageEngine engine) {
         this(engine, System.out);
@@ -63,7 +69,7 @@ public final class Executor {
      *
      * @param engine storage engine backing tables and catalogs
      * @param output target print stream for query results
-     * @throws IllegalArgumentException if engine or output is null
+     * @throws IllegalArgumentException if {@code engine} or {@code output} is null
      */
     public Executor(StorageEngine engine, PrintStream output) {
         if (engine == null) {
@@ -84,7 +90,7 @@ public final class Executor {
      * Parses and executes a multi-statement SQL script.
      *
      * @param sql script containing one or more semicolon-separated statements
-     * @throws IllegalArgumentException if sql is null or execution fails
+     * @throws IllegalArgumentException if {@code sql} is null or execution fails
      */
     public void execute(String sql) {
         if (sql == null) {
@@ -102,7 +108,8 @@ public final class Executor {
      * Executes a list of parsed statements, tracking statement numbers in the MDC.
      *
      * @param statements statements to bind and execute
-     * @throws IllegalArgumentException if statements is null or execution fails
+     * @throws IllegalArgumentException if {@code statements} is null or execution
+     *                                  fails
      */
     public void execute(List<Statement> statements) {
         if (statements == null) {
@@ -128,7 +135,8 @@ public final class Executor {
     }
 
     /**
-     * Executes a single query and returns the matching rows in memory.
+     * Executes a single query against a pinned catalog snapshot and returns the
+     * matching rows in memory.
      *
      * @param sql SQL query string containing a single SELECT statement
      * @return list of rows produced by the query
@@ -136,6 +144,39 @@ public final class Executor {
      *                                  statement
      */
     public List<Object[]> executeQuery(String sql) {
+        MDC.put("statementNumber", "1");
+        try {
+            SelectStatement select = parseSingleSelect(sql);
+            long started = System.nanoTime();
+            Catalog snapshot = engine.pinSnapshot(select.tableName());
+            try {
+                binder.bind(select, snapshot);
+                Operator plan = planner.plan(select, snapshot);
+                ScanStats stats = planner.lastScanStats();
+                List<Object[]> rows = drainToList(plan);
+                logSelectSummary(select.tableName(), rows.size(), stats, started);
+                return rows;
+            } finally {
+                engine.releaseSnapshot(snapshot);
+            }
+        } catch (RuntimeException exception) {
+            LOGGER.error("statement_failed operation=SELECT reason={}",
+                    LogSanitizer.sanitize(exception.getMessage()));
+            throw exception;
+        } finally {
+            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
+        }
+    }
+
+    /**
+     * Parses a SQL string and verifies that it yields exactly one SELECT statement.
+     *
+     * @param sql SQL query string to parse
+     * @return the single parsed SelectStatement
+     * @throws IllegalArgumentException if {@code sql} is null or does not yield
+     *                                  exactly one SELECT statement
+     */
+    private SelectStatement parseSingleSelect(String sql) {
         if (sql == null) {
             throw new IllegalArgumentException("sql must not be null");
         }
@@ -144,30 +185,58 @@ public final class Executor {
         if (statements.size() != 1 || !(statements.getFirst() instanceof SelectStatement select)) {
             throw new IllegalArgumentException("expected exactly one SELECT statement");
         }
+        return select;
+    }
 
-        MDC.put("statementNumber", "1");
-        try {
-            binder.bind(select);
-            Operator plan = planner.plan(select);
-            return drainToList(plan);
-        } finally {
-            MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
+    /**
+     * Pins a catalog snapshot (if applicable), binds, plans, and executes a single
+     * statement according to its type.
+     *
+     * @param statement the AST statement to execute
+     * @throws IllegalArgumentException if {@code statement} is null or fails
+     *                                  binding or execution
+     */
+    private void executeStatement(Statement statement) {
+        if (statement == null) {
+            throw new IllegalArgumentException("statement must not be null");
+        }
+        long started = System.nanoTime();
+
+        switch (statement) {
+            case CreateTableStatement createTable -> {
+                binder.bind(createTable);
+                executeCreateTable(createTable, started);
+            }
+            case CopyStatement copy -> runPinned(copy.tableName(), snapshot -> {
+                binder.bind(copy, snapshot);
+                executeCopy(copy, snapshot, started);
+            });
+            case SelectStatement select -> runPinned(select.tableName(), snapshot -> {
+                binder.bind(select, snapshot);
+                executeSelect(select, snapshot, started);
+            });
+            case DeleteStatement delete -> runPinned(delete.tableName(), snapshot -> {
+                binder.bind(delete, snapshot);
+                executeDelete(delete, snapshot, started);
+            });
         }
     }
 
     /**
-     * Binds, plans, and executes a single statement according to its type.
+     * Pins the table's current catalog version, runs {@code action} against it,
+     * and releases the pin when the action completes or fails, so the version's
+     * partition files stay on disk for the whole statement.
      *
-     * @param statement the AST statement to execute
+     * @param tableName table whose current version is pinned
+     * @param action    statement body executed against the pinned snapshot
+     * @throws IllegalArgumentException if the table does not exist
      */
-    private void executeStatement(Statement statement) {
-        long started = System.nanoTime();
-        binder.bind(statement);
-
-        switch (statement) {
-            case CreateTableStatement createTable -> executeCreateTable(createTable, started);
-            case CopyStatement copy -> executeCopy(copy, started);
-            case SelectStatement select -> executeSelect(select, started);
+    private void runPinned(String tableName, Consumer<Catalog> action) {
+        Catalog snapshot = engine.pinSnapshot(tableName);
+        try {
+            action.accept(snapshot);
+        } finally {
+            engine.releaseSnapshot(snapshot);
         }
     }
 
@@ -178,48 +247,90 @@ public final class Executor {
      * @return operation name string
      */
     private static String resolveOperation(Statement statement) {
+        if (statement == null) {
+            return "UNKNOWN";
+        }
         return switch (statement) {
             case CreateTableStatement _ -> "CREATE_TABLE";
             case CopyStatement _ -> "COPY";
             case SelectStatement _ -> "SELECT";
+            case DeleteStatement _ -> "DELETE";
         };
     }
 
     /**
-     * Executes a CREATE TABLE statement.
+     * Executes a copy-on-write {@code DELETE} statement against the pinned snapshot
+     * and logs the committed version and partition counts. Writes nothing to the
+     * output stream.
+     *
+     * @param statement DELETE statement
+     * @param snapshot  pinned catalog snapshot at statement start
+     * @param started   nano timestamp when execution started
+     */
+    private void executeDelete(DeleteStatement statement, Catalog snapshot, long started) {
+        DeletePlan plan = planner.planDelete(statement, snapshot);
+        DeleteResult result = engine.deleteRows(snapshot, plan.rewriteSet(), plan.rowMatcher());
+        LOGGER.debug(
+                "statement=DELETE table={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} version={} durationMs={}",
+                statement.tableName(), result.rowsDeleted(), result.partitionsRewritten(),
+                result.partitionsCarried(), result.version(), elapsedMillis(started));
+    }
+
+    /**
+     * Executes a {@code CREATE TABLE} statement and logs version 0.
      *
      * @param statement CREATE TABLE statement
      * @param started   nano timestamp when execution started
      */
     private void executeCreateTable(CreateTableStatement statement, long started) {
         engine.createTable(statement.tableName(), statement.columns());
-        LOGGER.debug("statement=CREATE_TABLE table={} durationMs={}",
+        LOGGER.debug("statement=CREATE_TABLE table={} version=0 durationMs={}",
                 statement.tableName(), elapsedMillis(started));
     }
 
     /**
-     * Executes a COPY statement.
+     * Executes a {@code COPY} statement against the pinned snapshot and logs the
+     * committed version and partition counts.
      *
      * @param statement COPY statement
+     * @param snapshot  pinned catalog snapshot at statement start
      * @param started   nano timestamp when execution started
      */
-    private void executeCopy(CopyStatement statement, long started) {
-        engine.copyFile(statement.tableName(), statement.csvFilePath());
-        LOGGER.debug("statement=COPY table={} file={} durationMs={}",
-                statement.tableName(), LogSanitizer.sanitize(statement.csvFilePath()), elapsedMillis(started));
+    private void executeCopy(CopyStatement statement, Catalog snapshot, long started) {
+        CopyResult result = engine.copyFile(snapshot, statement.csvFilePath());
+        LOGGER.debug("statement=COPY table={} file={} rows={} partitions={} version={} durationMs={}",
+                statement.tableName(), LogSanitizer.sanitize(statement.csvFilePath()), result.rows(),
+                result.partitions(), result.version(), elapsedMillis(started));
     }
 
     /**
-     * Executes a SELECT statement by draining its operator pipeline to output.
+     * Executes a {@code SELECT} statement against the pinned snapshot by draining
+     * its operator pipeline to output.
      *
      * @param statement SELECT statement
+     * @param snapshot  pinned catalog snapshot at statement start
      * @param started   nano timestamp when execution started
      */
-    private void executeSelect(SelectStatement statement, long started) {
-        Operator plan = planner.plan(statement);
+    private void executeSelect(SelectStatement statement, Catalog snapshot, long started) {
+        Operator plan = planner.plan(statement, snapshot);
+        ScanStats stats = planner.lastScanStats();
         long rowsOut = drainToOutput(plan);
-        LOGGER.debug("statement=SELECT table={} rowsOut={} durationMs={}",
-                statement.tableName(), rowsOut, elapsedMillis(started));
+        logSelectSummary(statement.tableName(), rowsOut, stats, started);
+    }
+
+    /**
+     * Logs the summary line of a completed {@code SELECT} statement.
+     *
+     * @param tableName target table name
+     * @param rowsOut   number of rows emitted by the query
+     * @param stats     scan statistics from the planner
+     * @param started   nano timestamp when execution started
+     */
+    private static void logSelectSummary(String tableName, long rowsOut, ScanStats stats, long started) {
+        LOGGER.debug(
+                "statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                tableName, rowsOut, stats.partitionsRead(), stats.partitionsPruned(),
+                stats.version(), elapsedMillis(started));
     }
 
     /**

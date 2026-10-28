@@ -91,8 +91,9 @@ All Java code must follow **JetBrains' Java Best Practices** for clean design, a
 1. **Switch Expressions**: Prefer modern `switch` expressions and pattern matching over cascading `else-if` blocks for multi-condition branching.
 2. **No Empty Catch Blocks**:
    - Never swallow exceptions silently.
-   - Catch blocks must either:
-     - Log the exception with `LOGGER.error("...", e)` and rethrow (or wrap in an unchecked exception).
+   - Catch blocks must do one of the following:
+     - Rethrow, or wrap in an unchecked exception that keeps the original as its cause (`new IllegalStateException("...", e)`). Log here only if the catch block is a logging boundary or adds context the exception does not carry (see §5.4).
+     - Handle the failure and continue (e.g. best-effort cleanup). The catch block is then the only record of the failure, so it **must** log it with `LOGGER.error(...)`.
      - Return an explicit, documented fallback value if the failure is gracefully recoverable.
 3. **Collections Over Raw Arrays**:
    - Prefer `List<T>`, `Set<T>`, and `Map<K, V>` (`ArrayList`, `HashMap`) over fixed-size raw arrays for general data manipulation.
@@ -221,10 +222,38 @@ All logging in the engine must adhere strictly to the format defined in [`exerci
 ### 5.3 Engine Log Levels (Strictly Two Levels)
 1. **`LOGGER.debug(...)`**: Used for normal operational flow (engine startup/shutdown, partition scans, cache lookups, statistics recording).
 2. **`LOGGER.error(...)`**: Used for failures.
-   - **Invariant**: Any thrown exception must leave at least one `LOGGER.error(...)` line in the active session's log file.
+   - **Invariant** (Exercise 1 §3, Exercise 5 §6 test 1): every exception the engine throws must leave at least one `ERROR` line in the active session's log file. A failing statement must leave an `ERROR` line carrying that statement's `statementNumber`. The invariant counts *failures*, not `throw` statements: it is met by logging at the boundary the failure passes through (§5.4), not by logging next to every `throw`.
    - The course uses *only* `debug` and `error` in engine code. Avoid `info`, `warn`, or `trace`.
 
-### 5.4 CSV Message Hygiene
+### 5.4 Log Failures Once, at the Boundary (No Log-and-Throw)
+Logging an error and then throwing an exception with the same message is an anti-pattern: every frame the exception passes through adds another copy of the same line, and the log no longer tells you how many failures happened. A failure is logged **once**, by the code that handles it or by the boundary it crosses.
+
+1. **Throw sites throw plainly.** Guard clauses and validation throw an exception with a descriptive message and do **not** log. Put the identifying values (table name, column, version) into the exception message so the boundary line is self-contained.
+   ```java
+   // Wrong: log-and-throw duplicates the line
+   LOGGER.error("unknown table: {}", tableName);
+   throw new IllegalArgumentException("unknown table: " + tableName);
+
+   // Right
+   throw new IllegalArgumentException("unknown table: " + tableName);
+   ```
+   Never add helpers that log and return an exception (e.g. `throw fail(message)`); they are the same anti-pattern behind a method name.
+2. **Log at the source only to add context that would otherwise be lost.** This is allowed when wrapping a checked exception whose cause message the boundary will not see (for example an `IOException` with the file path), or when the catch block swallows the failure (for example best-effort cleanup):
+   ```java
+   } catch (IOException exception) {
+       LOGGER.error("api=writePartitionFile table={} partition={} error={}", tableName, partitionNumber,
+               LogSanitizer.sanitize(exception.getMessage()));
+       throw new IllegalStateException("Could not write partition " + partitionNumber, exception);
+   }
+   ```
+   If the log line would only repeat the exception message, do not log.
+
+   Exception: `SqlParser` logs `failed line=… col=… durationMs=…` before rethrowing, as required by Exercise 3 §6. Keep it.
+3. **Argument-contract violations by Java callers** (e.g. `null` passed to a constructor or public method) throw `IllegalArgumentException` without logging. The caller owns that failure; through the CLI it is still logged where the failure is handled.
+4. **`statementNumber` stays numeric at boundaries.** Public entry points that can log before a statement starts (e.g. `Executor.execute(String)`) default a missing MDC `statementNumber` to `"0"` (§5.2).
+5. **Tests.** Unit tests assert on the exception type and message. Tests that check `ERROR` lines assert on the line written where the failure is handled, not on throw sites; a test may assert that a component does *not* log at its throw site.
+
+### 5.5 CSV Message Hygiene
 - **Never include unescaped commas or line breaks** in `logMessage`.
 - Always use SLF4J parameterized logging:
   ```java
@@ -257,4 +286,5 @@ Before reporting a sub-exercise as complete:
 - [ ] Indentation is 4 spaces; methods are 10–20 lines with guard clauses.
 - [ ] Try-with-resources used for all file and stream operations.
 - [ ] Logging uses SLF4J with MDC context (`sessionId`, `statementNumber`) and only `debug`/`error` levels.
+- [ ] No log-and-throw: failures are logged once at a boundary (§5.4); throw sites only throw.
 - [ ] `mvn -B verify` passes with 0 failures and 0 errors.

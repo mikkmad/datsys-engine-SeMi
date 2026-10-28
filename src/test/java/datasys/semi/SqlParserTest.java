@@ -58,18 +58,32 @@ class SqlParserTest {
                                 Optional.empty());
                 assertEquals(expectedSelectNoWhere, selectNoWhereResults.getFirst());
 
-                // 1.5 Multi-statement script
+                // 1.5 DELETE with WHERE
+                List<Statement> deleteWithWhereResults = parser.parse("DELETE FROM trips WHERE distance > 100;");
+                assertEquals(1, deleteWithWhereResults.size());
+                DeleteStatement expectedDeleteWithWhere = new DeleteStatement(
+                                "trips",
+                                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)));
+                assertEquals(expectedDeleteWithWhere, deleteWithWhereResults.getFirst());
+
+                // 1.6 DELETE without WHERE
+                List<Statement> deleteNoWhereResults = parser.parse("DELETE FROM trips;");
+                assertEquals(1, deleteNoWhereResults.size());
+                DeleteStatement expectedDeleteNoWhere = new DeleteStatement("trips", Optional.empty());
+                assertEquals(expectedDeleteNoWhere, deleteNoWhereResults.getFirst());
+
+                // 1.7 Multi-statement script with CREATE, COPY, DELETE, SELECT (Exercise 7 §5 Test 1)
                 String script = """
                                 CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
                                 COPY trips FROM 'trips.csv';
-                                SELECT * FROM trips WHERE distance > 100;
+                                DELETE FROM trips WHERE distance > 100;
                                 SELECT * FROM trips;
                                 """;
                 List<Statement> scriptResults = parser.parse(script);
                 assertEquals(4, scriptResults.size());
                 assertEquals(expectedCreate, scriptResults.get(0));
                 assertEquals(expectedCopy, scriptResults.get(1));
-                assertEquals(expectedSelectWithWhere, scriptResults.get(2));
+                assertEquals(expectedDeleteWithWhere, scriptResults.get(2));
                 assertEquals(expectedSelectNoWhere, scriptResults.get(3));
         }
 
@@ -252,6 +266,88 @@ class SqlParserTest {
         void emptyCopyPathParses() {
                 List<Statement> statements = parser.parse("COPY trips FROM '';");
                 assertEquals(List.of(new CopyStatement("trips", "")), statements);
+        }
+
+        /**
+         * Required Test 1: DELETE with and without WHERE parses to the expected AST.
+         */
+        @Test
+        void deleteWithAndWithoutWhereParsesToExpectedAst() {
+                assertEquals(List.of(new DeleteStatement("trips", Optional.empty())),
+                                parser.parse("DELETE FROM trips;"));
+                assertEquals(List.of(new DeleteStatement("trips",
+                                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)))),
+                                parser.parse("DELETE FROM trips WHERE distance > 100;"));
+        }
+
+        @Test
+        void deleteKeywordCaseInsensitiveAndKeywordPrefixIdentifier() {
+                // Mixed case keywords preserve identifier casing
+                List<Statement> mixedCase = parser.parse("dElEtE fRoM TriPs wHeRe CityName = 'Odense';");
+                assertEquals(1, mixedCase.size());
+                DeleteStatement expectedMixed = new DeleteStatement("TriPs",
+                                Optional.of(new Predicate("CityName", Comparison.EQUALS, "Odense")));
+                assertEquals(expectedMixed, mixedCase.getFirst());
+
+                // Identifiers starting with 'delete' prefix remain valid identifiers
+                List<Statement> prefixed = parser.parse("DELETE FROM delete1 WHERE deleted_rows = 1;");
+                assertEquals(1, prefixed.size());
+                DeleteStatement expectedPrefixed = new DeleteStatement("delete1",
+                                Optional.of(new Predicate("deleted_rows", Comparison.EQUALS, 1L)));
+                assertEquals(expectedPrefixed, prefixed.getFirst());
+        }
+
+        @Test
+        void malformedDeleteInputsAssertLineAndColumn() {
+                // Missing FROM keyword
+                SqlParseException missingFrom = assertThrows(SqlParseException.class,
+                                () -> parser.parse("DELETE trips;"));
+                assertEquals(1, missingFrom.line());
+                assertEquals(7, missingFrom.column());
+
+                // DELETE * FROM is invalid SQL
+                SqlParseException starFrom = assertThrows(SqlParseException.class,
+                                () -> parser.parse("DELETE * FROM trips;"));
+                assertEquals(1, starFrom.line());
+                assertEquals(7, starFrom.column());
+
+                // Missing table name
+                SqlParseException missingTable = assertThrows(SqlParseException.class,
+                                () -> parser.parse("DELETE FROM;"));
+                assertEquals(1, missingTable.line());
+                assertEquals(11, missingTable.column());
+
+                // Reserved keyword as table name
+                SqlParseException reservedKeyword = assertThrows(SqlParseException.class,
+                                () -> parser.parse("DELETE FROM DELETE;"));
+                assertEquals(1, reservedKeyword.line());
+                assertEquals(12, reservedKeyword.column());
+
+                // WHERE without predicate
+                SqlParseException whereEmpty = assertThrows(SqlParseException.class,
+                                () -> parser.parse("DELETE FROM trips WHERE;"));
+                assertEquals(1, whereEmpty.line());
+                assertEquals(23, whereEmpty.column());
+
+                // Missing terminating semicolon
+                SqlParseException noSemicolon = assertThrows(SqlParseException.class,
+                                () -> parser.parse("DELETE FROM trips"));
+                assertEquals(1, noSemicolon.line());
+                assertEquals(17, noSemicolon.column());
+
+                // LONG overflow in DELETE WHERE clause
+                SqlParseException overflow = assertThrows(SqlParseException.class,
+                                () -> parser.parse("DELETE FROM trips WHERE distance > 9223372036854775808;"));
+                assertEquals(1, overflow.line());
+                assertEquals(35, overflow.column());
+        }
+
+        @Test
+        void deleteStatementRejectsInvalidArguments() {
+                assertThrows(IllegalArgumentException.class, () -> new DeleteStatement(null, Optional.empty()));
+                assertThrows(IllegalArgumentException.class, () -> new DeleteStatement("", Optional.empty()));
+                assertThrows(IllegalArgumentException.class, () -> new DeleteStatement("   ", Optional.empty()));
+                assertThrows(IllegalArgumentException.class, () -> new DeleteStatement("trips", null));
         }
 
         private Object parseConstant(String predicateSql) {

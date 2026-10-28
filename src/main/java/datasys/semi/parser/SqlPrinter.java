@@ -21,7 +21,8 @@ public final class SqlPrinter {
      *
      * @param statement the AST statement to print
      * @return semicolon-terminated SQL text representation
-     * @throws IllegalArgumentException if statement is null
+     * @throws IllegalArgumentException if statement is null or contains a literal
+     *                                  that cannot be represented in SQL
      */
     public String print(Statement statement) {
         if (statement == null) {
@@ -32,6 +33,7 @@ public final class SqlPrinter {
             case CreateTableStatement createTable -> printCreateTable(createTable);
             case CopyStatement copy -> printCopy(copy);
             case SelectStatement select -> printSelect(select);
+            case DeleteStatement delete -> printDelete(delete);
         };
     }
 
@@ -53,9 +55,11 @@ public final class SqlPrinter {
      *
      * @param statement the copy statement
      * @return SQL text string
+     * @throws IllegalArgumentException if the CSV path contains unrepresentable
+     *                                  characters
      */
     private String printCopy(CopyStatement statement) {
-        return "COPY " + statement.tableName() + " FROM '" + statement.csvFilePath() + "';";
+        return "COPY " + statement.tableName() + " FROM " + formatString(statement.csvFilePath()) + ";";
     }
 
     /**
@@ -63,6 +67,8 @@ public final class SqlPrinter {
      *
      * @param statement the select statement
      * @return SQL text string
+     * @throws IllegalArgumentException if the predicate literal cannot be
+     *                                  represented in SQL
      */
     private String printSelect(SelectStatement statement) {
         String columnsPart = "*";
@@ -79,10 +85,29 @@ public final class SqlPrinter {
     }
 
     /**
+     * Formats a DELETE statement as SQL text.
+     *
+     * @param statement the delete statement
+     * @return SQL text string
+     * @throws IllegalArgumentException if the predicate literal cannot be
+     *                                  represented in SQL
+     */
+    private String printDelete(DeleteStatement statement) {
+        if (statement.where().isEmpty()) {
+            return "DELETE FROM " + statement.tableName() + ";";
+        }
+
+        Predicate predicate = statement.where().get();
+        return "DELETE FROM " + statement.tableName() + " WHERE " + printPredicate(predicate) + ";";
+    }
+
+    /**
      * Formats a Predicate as SQL text.
      *
      * @param predicate the predicate condition
      * @return predicate SQL text
+     * @throws IllegalArgumentException if the predicate constant cannot be
+     *                                  represented in SQL
      */
     private String printPredicate(Predicate predicate) {
         String operator = switch (predicate.comparison()) {
@@ -100,16 +125,32 @@ public final class SqlPrinter {
      *
      * @param constant constant value: String, Long, or Double
      * @return formatted literal string accepted by the grammar
-     * @throws IllegalArgumentException if the constant is of an unsupported type
+     * @throws IllegalArgumentException if the constant is of an unsupported type,
+     *                                  contains unrepresentable characters,
      *                                  or is a non-finite Double
      */
     private String formatLiteral(Object constant) {
         return switch (constant) {
-            case String stringValue -> "'" + stringValue + "'";
+            case String stringValue -> formatString(stringValue);
             case Long longValue -> Long.toString(longValue);
             case Double doubleValue -> formatDouble(doubleValue);
             default -> throw new IllegalArgumentException("unsupported constant type: " + constant);
         };
+    }
+
+    /**
+     * Formats a string as a single-quoted SQL literal ({@code '...'}).
+     *
+     * @param value raw string value
+     * @return single-quoted literal string
+     * @throws IllegalArgumentException if value contains single-quotes or newlines
+     */
+    private static String formatString(String value) {
+        if (value.contains("'") || value.contains("\r") || value.contains("\n")) {
+            throw new IllegalArgumentException(
+                    "string contains characters that cannot be represented in SQL literal: " + value);
+        }
+        return "'" + value + "'";
     }
 
     /**

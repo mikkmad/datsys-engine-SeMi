@@ -8,21 +8,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import datasys.semi.engine.StorageEngine;
+import datasys.semi.engine.StorageEngine.Catalog;
+import datasys.semi.engine.StorageEngine.Partition;
 
 /**
- * Leaf operator that reads the partitions it is handed, in order.
+ * Leaf operator that reads the partitions it is handed from a pinned
+ * {@link Catalog} snapshot, in order.
  *
  * <p>
- * The scan is deliberately dumb: it never sees the query's predicate and makes
- * no decision about which partitions are worth reading. That decision needs
- * only the min/max summaries in the catalog, never the column data, so it
- * belongs to the planner and has already been made by the time this operator
- * runs. Handed an empty partition list — a fully pruned query — the scan opens
- * no data file and returns no rows.
- *
- * <p>
- * Rows are buffered one partition at a time rather than all at once, so the
- * pipeline never holds more than a single partition in memory.
+ * The scan never re-reads metadata from {@link StorageEngine}: it resolves
+ * partition entries directly from the immutable {@link Catalog} snapshot handed
+ * to it at plan time. Rows are buffered one partition at a time rather than all
+ * at once, so the pipeline never holds more than a single partition in memory.
  */
 public final class ScanOperator implements Operator {
 
@@ -31,7 +28,7 @@ public final class ScanOperator implements Operator {
 
     // --- Scan Target ---
     private final StorageEngine engine;
-    private final String tableName;
+    private final Catalog snapshot;
     private final List<Integer> partitionNumbers;
 
     // --- Cursor State ---
@@ -44,28 +41,30 @@ public final class ScanOperator implements Operator {
     private long rowsOut;
 
     /**
-     * Constructs a scan over an explicit list of partitions.
+     * Constructs a scan over an explicit list of partition indices within a pinned
+     * catalog snapshot.
      *
      * @param engine           storage engine owning the table's data files
-     * @param tableName        name of the table being scanned
-     * @param partitionNumbers the zero-based partition numbers to read, in read
-     *                         order; may be empty but must not be null
-     * @throws IllegalArgumentException if engine or partitionNumbers is null, or
-     *                                  tableName is null or blank
+     * @param snapshot         pinned catalog snapshot of the table being scanned
+     * @param partitionNumbers zero-based partition indices in
+     *                         {@code snapshot.partitions()} to read,
+     *                         in read order; may be empty but must not be null
+     * @throws IllegalArgumentException if {@code engine}, {@code snapshot}, or
+     *                                  {@code partitionNumbers} is null
      */
-    public ScanOperator(StorageEngine engine, String tableName, List<Integer> partitionNumbers) {
+    public ScanOperator(StorageEngine engine, Catalog snapshot, List<Integer> partitionNumbers) {
         if (engine == null) {
             throw new IllegalArgumentException("engine must not be null");
         }
-        if (tableName == null || tableName.isBlank()) {
-            throw new IllegalArgumentException("table name must not be null or blank");
+        if (snapshot == null) {
+            throw new IllegalArgumentException("snapshot must not be null");
         }
         if (partitionNumbers == null) {
             throw new IllegalArgumentException("partition number list must not be null");
         }
 
         this.engine = engine;
-        this.tableName = tableName;
+        this.snapshot = snapshot;
         this.partitionNumbers = List.copyOf(partitionNumbers);
     }
 
@@ -84,7 +83,8 @@ public final class ScanOperator implements Operator {
         nextPartitionIndex = 0;
         rows = Collections.emptyIterator();
 
-        LOGGER.debug("operator=Scan table={} partitions={}", tableName, partitionNumbers.size());
+        LOGGER.debug("operator=Scan table={} version={} partitions={}",
+                snapshot.table(), snapshot.version(), partitionNumbers.size());
     }
 
     /**
@@ -122,16 +122,18 @@ public final class ScanOperator implements Operator {
         rows = Collections.emptyIterator();
 
         LOGGER.debug("operator=Scan table={} partitionsRead={} rowsOut={}",
-                tableName, partitionsOpened, rowsOut);
+                snapshot.table(), partitionsOpened, rowsOut);
     }
 
     /**
-     * Reads the next partition into the row buffer and resets the row cursor.
+     * Reads the next partition from the pinned snapshot into the row buffer and
+     * resets the row cursor.
      */
     private void bufferNextPartition() {
         int partitionNumber = partitionNumbers.get(nextPartitionIndex++);
+        Partition partition = snapshot.partitions().get(partitionNumber);
 
-        rows = engine.readPartition(tableName, partitionNumber).iterator();
+        rows = engine.readPartition(snapshot, partition).iterator();
         partitionsOpened++;
     }
 
@@ -161,6 +163,6 @@ public final class ScanOperator implements Operator {
      * @return table name
      */
     public String tableName() {
-        return tableName;
+        return snapshot.table();
     }
 }
