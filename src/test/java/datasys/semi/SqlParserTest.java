@@ -268,6 +268,18 @@ class SqlParserTest {
                 assertEquals(List.of(new CopyStatement("trips", "")), statements);
         }
 
+        /**
+         * Required Test 1: DELETE with and without WHERE parses to the expected AST.
+         */
+        @Test
+        void deleteWithAndWithoutWhereParsesToExpectedAst() {
+                assertEquals(List.of(new DeleteStatement("trips", Optional.empty())),
+                                parser.parse("DELETE FROM trips;"));
+                assertEquals(List.of(new DeleteStatement("trips",
+                                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)))),
+                                parser.parse("DELETE FROM trips WHERE distance > 100;"));
+        }
+
         @Test
         void deleteKeywordCaseInsensitiveAndKeywordPrefixIdentifier() {
                 // Mixed case keywords preserve identifier casing

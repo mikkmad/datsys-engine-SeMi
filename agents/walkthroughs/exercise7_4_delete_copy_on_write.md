@@ -58,8 +58,8 @@ A manual run of `./engine -f` with `CREATE`, `COPY trips.csv`, `COPY trips_sorte
 
 | Required test (Exercise 7 §5) | Test |
 |---|---|
-| 1. Parser | `SqlParserTest` / `SqlPrinterTest` (from 7.3) |
-| 2. Binder | `BinderIT` (from 7.3) |
+| 1. Parser | `SqlParserTest.deleteWithAndWithoutWhereParsesToExpectedAst` (added in 7.4); printer round-trip in `SqlPrinterTest.roundTripDeleteStatementsWithoutWhere` / `roundTripDeleteStatementsWithWhereComparisonsAndTypes` (from 7.3) |
+| 2. Binder | `BinderIT.deleteUnknownTableThrowsIllegalArgumentException`, `deleteUnknownColumnInWhereThrowsIllegalArgumentException`, `deleteTypeMismatchedConstantInWhereThrowsIllegalArgumentException` (from 7.3) |
 | 3. Versions | `ExecutorTest.createCopyCopyDeleteProduceVersionsZeroThroughThree` |
 | 4. Rewrite set | `DeleteTest.selectiveDeleteRewritesExactlyPartitionsThatCanMatch` |
 | 5. Restart | `DeleteTest.freshEngineSeesPostDeleteVersion` |
