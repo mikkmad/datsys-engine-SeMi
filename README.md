@@ -60,9 +60,11 @@ Package the JAR first (`mvn package`), then use the `./engine` launcher script:
 
 ### Synthetic Data & Performance Experiments
 
-1. **Activate the Python environment** (auto-initialized in the VS Code DevContainer, or created locally via `./setup-python-env.sh`):
+1. **Install the Python dependencies** (`faker`, from `requirements.txt`):
    ```bash
-   source setup-python-env.sh
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
    ```
 2. **Generate benchmark CSV datasets** (`generated_data/data_1mb.csv`, `data_10mb.csv`, `data_100mb.csv`, `data_1000mb.csv`):
    ```bash
