@@ -133,13 +133,14 @@ class ConflictTest {
     }
 
     /**
-     * Verifies that the conflict leaves an ERROR line in the session log that
-     * carries the conflict message.
+     * Verifies that the storage engine throws the conflict without logging it:
+     * the ERROR line is written once, by the statement boundary that handles the
+     * failure (AGENTS §5.4), which {@code TwoWriterConflictTest} checks.
      *
      * @throws IOException if the log file cannot be read
      */
     @Test
-    void conflictLeavesErrorLineWithConflictMessage() throws IOException {
+    void conflictIsThrownWithoutErrorLineAtTheThrowSite() throws IOException {
         String session = UUID.randomUUID().toString();
         Catalog staleBase = engine.snapshot("trips");
         copyOnCurrentVersion();
@@ -153,9 +154,8 @@ class ConflictTest {
 
         List<String> logLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8);
         assertTrue(logLines.stream()
-                .filter(line -> line.contains("," + session + ",") && line.contains(",ERROR,"))
-                .anyMatch(line -> line.contains("conflict table=trips base=0 current=1")),
-                "expected an ERROR line carrying the conflict message");
+                .noneMatch(line -> line.contains("," + session + ",") && line.contains(",ERROR,")),
+                "the storage engine must not log the conflict it throws");
     }
 
     /**

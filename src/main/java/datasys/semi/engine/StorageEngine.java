@@ -305,9 +305,6 @@ public final class StorageEngine {
             long rowCount = addedPartitions.stream().mapToLong(Partition::rowCount).sum();
             logCopySummary(tableName, csvFilePath, rowCount, addedPartitions.size(), nextCatalog.version(), started);
             return new CopyResult(rowCount, addedPartitions.size(), nextCatalog.version());
-        } catch (RuntimeException exception) {
-            LOGGER.error("api=copyFile table={} error={}", tableName, LogSanitizer.sanitize(exception.getMessage()));
-            throw exception;
         } finally {
             if (!committed) {
                 discardWrittenPartitions(tableDirectory, writtenFiles);
