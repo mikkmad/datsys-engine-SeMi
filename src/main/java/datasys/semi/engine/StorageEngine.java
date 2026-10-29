@@ -94,6 +94,20 @@ public final class StorageEngine {
     // --- Table Directory Lifecycle ---
     private final Object tableDirectoryLock = new Object();
 
+    // --- Test Seams ---
+    /**
+     * Runs before a commit's validation. Production never touches it; a test parks
+     * a writer here.
+     *
+     * <p>
+     * {@link #commitCatalog(Catalog, Catalog)} reads the field once per commit and
+     * runs the hook outside the table's commit critical section, so a parked
+     * writer never blocks other writers or readers. The field is {@code volatile}
+     * because a test thread assigns it while writer threads read it.
+     */
+    volatile Runnable beforeCommit = () -> {
+    };
+
     /**
      * Constructs a storage engine with the default partition capacity.
      *
@@ -356,6 +370,8 @@ public final class StorageEngine {
      * atomically for the table's key, so only one writer commits at a time. The
      * catalog is serialized to a uniquely named temporary file beforehand; a
      * writer that fails validation never renames it and the file is deleted.
+     * The {@link #beforeCommit} hook runs between those two steps: before
+     * validation and outside the critical section.
      *
      * @param base expected current catalog snapshot, or {@code null} when creating
      *             version 0
@@ -377,6 +393,7 @@ public final class StorageEngine {
 
         try {
             writeTemporaryCatalog(next, temporary);
+            beforeCommit.run();
             catalogs.compute(next.table(), (tableName, current) -> {
                 validateCommitBase(tableName, base, current);
                 publishCatalogAtomically(next, temporary, target);
