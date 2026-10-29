@@ -12,7 +12,7 @@
 
 | File | Change |
 |------|--------|
-| `engine/StorageEngine.java` | New `// --- Test Seams ---` group with `volatile Runnable beforeCommit = () -> { };`. `commitCatalog` reads it once into a local and runs it after `writeTemporaryCatalog(...)`, before `catalogs.compute(...)`. Javadoc updated. |
+| `engine/StorageEngine.java` | New `// --- Test Seams ---` group with `volatile Runnable beforeCommit = () -> { };`. `commitCatalog` calls `beforeCommit.run()` after `writeTemporaryCatalog(...)`, before `catalogs.compute(...)`. Javadoc updated. |
 | `src/test/java/datasys/semi/SnapshotReadTest.java` *(new)* | Required test 1. |
 
 **Hook placement.** The hook runs after the temporary catalog file is written and before validation, outside
@@ -23,9 +23,12 @@
 - A commit started from inside the hook would also fail with `ConcurrentHashMap`'s "Recursive update".
 
 **Visibility.** A test thread assigns the field while writer threads read it, so it's `volatile`. It's the one
-non-`final` field here, a deliberate exception to AGENTS §3.2.4. `commitCatalog` copies it into a local before
-running it, so a writer parked inside the hook keeps the hook it started with even after the test resets the
-field (§3: "the parked writer holds the old hook").
+non-`final` field here, a deliberate exception to AGENTS §3.2.4. For the §3 choreography `volatile` is a
+safeguard rather than a necessity: `executor.submit` and the latches already order the test's writes before the
+writer's reads. It keeps the seam safe for tests that hand off differently, at the cost of one volatile read per
+commit. `beforeCommit.run()` reads the field once and then invokes what it read, so a writer parked inside the
+hook keeps the hook it started with even after the test resets the field (§3: "the parked writer holds the old
+hook").
 
 **Failure path.** A hook that throws goes through the same cleanup as any other commit failure. `commitCatalog`'s
 `finally` deletes the temporary catalog file, and `copyFile`/`deleteRows` delete their partitions through the

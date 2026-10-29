@@ -393,8 +393,7 @@ public final class StorageEngine {
 
         try {
             writeTemporaryCatalog(next, temporary);
-            Runnable hook = beforeCommit;
-            hook.run();
+            beforeCommit.run();
             catalogs.compute(next.table(), (tableName, current) -> {
                 validateCommitBase(tableName, base, current);
                 publishCatalogAtomically(next, temporary, target);
