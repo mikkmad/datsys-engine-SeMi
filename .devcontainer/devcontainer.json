@@ -45,6 +45,6 @@
   "postCreateCommand": {
     "java-check": "java --version",
     "mvn-check": "mvn --version",
-    "setup-python-env": "bash ./setup-python-env.sh"
+    "setup-python-env": "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
   }
 }
