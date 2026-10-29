@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import datasys.semi.engine.ConflictException;
 import datasys.semi.engine.DeleteResult;
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
@@ -174,8 +175,8 @@ class DeleteTest {
 
     /**
      * Verifies that a DELETE against a stale snapshot fails with
-     * IllegalStateException, keeps the current version, and discards the
-     * partition files it wrote.
+     * ConflictException, keeps the current version, and discards the partition
+     * files it wrote.
      */
     @Test
     void staleSnapshotDeleteFailsAndLeavesNoNewPartitionFiles() throws IOException {
@@ -184,7 +185,7 @@ class DeleteTest {
         long filesBefore = countPartitionFiles();
 
         DeletePlan plan = planner.planDelete(deleteWhere(Comparison.EQUALS, 95L), stale);
-        assertThrows(IllegalStateException.class,
+        assertThrows(ConflictException.class,
                 () -> engine.deleteRows(stale, plan.rewriteSet(), plan.rowMatcher()));
 
         assertEquals(2L, engine.snapshot("trips").version());

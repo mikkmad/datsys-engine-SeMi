@@ -60,6 +60,12 @@ import org.slf4j.MDC;
  * retention window all update under the per-table lock of
  * {@code catalogs.compute}, so the class is safe for concurrent statements.
  * Orphans left by a crash are swept once at startup.
+ *
+ * <p>
+ * Concurrent writers follow first-committer-wins: a {@code COPY} or
+ * {@code DELETE} commits only if the table is still at the version of its
+ * snapshot, otherwise it aborts with {@link ConflictException} and its
+ * uncommitted partition files are deleted immediately.
  */
 public final class StorageEngine {
 
@@ -84,6 +90,9 @@ public final class StorageEngine {
     // --- Version Retention & Readers (mutated only inside catalogs.compute) ---
     private final Map<String, List<Catalog>> retainedVersions = new ConcurrentHashMap<>();
     private final Map<PinKey, PinnedVersion> pinnedVersions = new ConcurrentHashMap<>();
+
+    // --- Table Directory Lifecycle ---
+    private final Object tableDirectoryLock = new Object();
 
     /**
      * Constructs a storage engine with the default partition capacity.
@@ -255,9 +264,9 @@ public final class StorageEngine {
      *         version
      * @throws IllegalArgumentException if {@code snapshot} is null, the CSV cannot
      *                                  be read, or a line is malformed
-     * @throws IllegalStateException    if a partition file cannot be written, the
-     *                                  catalog cannot be persisted,
-     *                                  or the table's version advanced since
+     * @throws IllegalStateException    if a partition file cannot be written or the
+     *                                  catalog cannot be persisted
+     * @throws ConflictException        if the table's version advanced since
      *                                  {@code snapshot} was taken
      */
     public CopyResult copyFile(Catalog snapshot, String csvFilePath) {
@@ -310,8 +319,8 @@ public final class StorageEngine {
      * @return summary of deleted rows, rewritten and carried partitions, and the
      *         committed version
      * @throws IllegalArgumentException if any argument is null
-     * @throws IllegalStateException    if a partition cannot be read or written,
-     *                                  or the table's version advanced since
+     * @throws IllegalStateException    if a partition cannot be read or written
+     * @throws ConflictException        if the table's version advanced since
      *                                  {@code snapshot} was taken
      */
     public DeleteResult deleteRows(Catalog snapshot, List<Integer> rewriteSet, Predicate<Object[]> rowMatcher) {
@@ -341,13 +350,21 @@ public final class StorageEngine {
      * version still matches {@code base}, advances the table's retention window,
      * and deletes partition files that became unreachable.
      *
+     * <p>
+     * Validation, the atomic rename of the catalog file and the in-memory swap
+     * form one critical section per table: {@code catalogs.compute} runs them
+     * atomically for the table's key, so only one writer commits at a time. The
+     * catalog is serialized to a uniquely named temporary file beforehand; a
+     * writer that fails validation never renames it and the file is deleted.
+     *
      * @param base expected current catalog snapshot, or {@code null} when creating
      *             version 0
      * @param next new catalog version to persist and publish
      * @throws IllegalArgumentException if {@code next} is null or creating a table
      *                                  that already exists
-     * @throws IllegalStateException    if the current version does not match
-     *                                  {@code base} or persistence fails
+     * @throws IllegalStateException    if persistence fails
+     * @throws ConflictException        if the current version does not match
+     *                                  {@code base}
      */
     public void commitCatalog(Catalog base, Catalog next) {
         if (next == null) {
@@ -931,7 +948,7 @@ public final class StorageEngine {
         Path temporaryPath = finalPath.resolveSibling(finalPath.getFileName() + ".tmp-" + UUID.randomUUID());
 
         try {
-            Files.createDirectories(tableDirectory);
+            reserveTemporaryFile(tableDirectory, temporaryPath);
             writePartition(temporaryPath, rows, schema);
             moveAtomically(temporaryPath, finalPath);
             writtenFiles.add(finalPath);
@@ -946,6 +963,23 @@ public final class StorageEngine {
 
         return new Partition(dataDirectory.relativize(finalPath).toString(), rows.size(),
                 computeStatistics(rows, schema, tableName, partitionNumber));
+    }
+
+    /**
+     * Creates the table directory if needed and an empty temporary file in it, as
+     * one step under {@code tableDirectoryLock}. Once the temporary file exists the
+     * directory is non-empty, so a concurrent writer that aborts cannot remove it
+     * in {@link #discardWrittenPartitions(Path, List)}.
+     *
+     * @param tableDirectory directory receiving the partition file
+     * @param temporaryPath  temporary partition file to create
+     * @throws IOException if the directory or file cannot be created
+     */
+    private void reserveTemporaryFile(Path tableDirectory, Path temporaryPath) throws IOException {
+        synchronized (tableDirectoryLock) {
+            Files.createDirectories(tableDirectory);
+            Files.createFile(temporaryPath);
+        }
     }
 
     /**
@@ -966,27 +1000,39 @@ public final class StorageEngine {
     }
 
     /**
-     * Deletes only the partition files written by a failed {@code COPY}, and
-     * removes {@code data/
-     * 
-    <table>
-     * /} only if it is now empty.
+     * Deletes only the partition files written by a failed or conflicting
+     * {@code COPY} or {@code DELETE}, and removes {@code data/<table>/} only if it
+     * is now empty. The emptiness check and removal run under
+     * {@code tableDirectoryLock}, so a concurrent writer reserving a file in the
+     * directory never sees it vanish.
      *
      * @param tableDirectory directory holding the table's partition files
-     * @param writtenFiles   partition files written during the failed {@code COPY}
+     * @param writtenFiles   partition files written by the aborted statement
      */
-    private static void discardWrittenPartitions(Path tableDirectory, List<Path> writtenFiles) {
+    private void discardWrittenPartitions(Path tableDirectory, List<Path> writtenFiles) {
         cleanupTemporaryFiles(writtenFiles);
-        if (!Files.isDirectory(tableDirectory)) {
+        synchronized (tableDirectoryLock) {
+            removeDirectoryIfEmpty(tableDirectory);
+        }
+    }
+
+    /**
+     * Removes a directory if it exists and is empty. Failures are logged and not
+     * rethrown so cleanup never masks the original failure.
+     *
+     * @param directory directory to remove
+     */
+    private static void removeDirectoryIfEmpty(Path directory) {
+        if (!Files.isDirectory(directory)) {
             return;
         }
-
-        try (Stream<Path> remaining = Files.list(tableDirectory)) {
+        try (Stream<Path> remaining = Files.list(directory)) {
             if (remaining.findAny().isEmpty()) {
-                Files.deleteIfExists(tableDirectory);
+                Files.deleteIfExists(directory);
             }
         } catch (IOException exception) {
-            LOGGER.error("api=copyFile cleanup failed error={}", LogSanitizer.sanitize(exception.getMessage()));
+            LOGGER.error("api=discardWrittenPartitions dir={} error={}", LogSanitizer.sanitize(directory),
+                    LogSanitizer.sanitize(exception.getMessage()));
         }
     }
 
@@ -1213,15 +1259,18 @@ public final class StorageEngine {
 
     /**
      * Validates that the in-memory catalog state matches {@code base} prior to
-     * committing a new version.
+     * committing a new version (first committer wins). Must run inside the
+     * table's commit critical section.
      *
      * @param tableName table being committed
      * @param base      expected base catalog, or {@code null} for initial table
      *                  creation
      * @param current   current in-memory catalog entry
      * @throws IllegalArgumentException if creating a table that already exists
-     * @throws IllegalStateException    if updating a table whose current version
-     *                                  differs from {@code base}
+     * @throws IllegalStateException    if updating a table that has no current
+     *                                  catalog
+     * @throws ConflictException        if another statement committed since
+     *                                  {@code base} was taken
      */
     private static void validateCommitBase(String tableName, Catalog base, Catalog current) {
         if (base == null) {
@@ -1230,11 +1279,11 @@ public final class StorageEngine {
             }
             return;
         }
-        if (current == null || current.version() != base.version()) {
-            long currentVersion = current == null ? -1L : current.version();
-            throw new IllegalStateException(
-                    "stale base version for table " + tableName + ": expected " + base.version() + " but found "
-                            + currentVersion);
+        if (current == null) {
+            throw new IllegalStateException("unknown table at commit: " + tableName);
+        }
+        if (current.version() != base.version()) {
+            throw new ConflictException(tableName, base.version(), current.version());
         }
     }
 
