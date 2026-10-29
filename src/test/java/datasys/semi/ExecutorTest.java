@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.MDC;
 
+import datasys.semi.engine.ConflictException;
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.executor.Executor;
@@ -229,10 +230,10 @@ class ExecutorTest {
 
     /**
      * Verifies that committing against a stale base catalog version throws
-     * IllegalStateException (Invariant I3).
+     * ConflictException (Exercise 8 §1).
      */
     @Test
-    void commitWithStaleBaseVersionThrowsIllegalStateException() {
+    void commitWithStaleBaseVersionThrowsConflictException() {
         Executor executor = new Executor(engine);
         executor.execute("CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);");
 
@@ -240,7 +241,7 @@ class ExecutorTest {
         executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
         assertEquals(1L, engine.snapshot("trips").version());
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(ConflictException.class,
                 () -> engine.copyFile(staleSnapshotV0, csvFile.toString()));
         assertEquals(1L, engine.snapshot("trips").version());
     }

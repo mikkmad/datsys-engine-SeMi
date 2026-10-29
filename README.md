@@ -14,6 +14,11 @@ Built from first principles without external storage or SQL libraries, the engin
 - An ANTLR4 SQL parser, AST binder, and pretty-printer
 - A Volcano-style operator pipeline (`Scan`, `Filter`, `Project`)
 - Self-queryable 7-column CSV execution logs
+- Copy-on-write `DELETE` and repeated `COPY` over immutable partitions, committed through a versioned catalog with atomic swaps
+- Snapshot reads: each statement pins its catalog version, so scans see a consistent table state
+- Commit-time conflict detection for concurrent writers (first committer wins, `ConflictException` for the loser)
+
+See [`docs/transactions-design.md`](docs/transactions-design.md) for the versioning, commit, and conflict-detection design.
 
 ---
 
@@ -46,15 +51,20 @@ Package the JAR first (`mvn package`), then use the `./engine` launcher script:
 ./engine -c "CREATE TABLE trips (city STRING, distance LONG, price DOUBLE); COPY trips FROM 'src/main/resources/trips.csv';"
 ./engine -c "SELECT * FROM trips WHERE distance > 100;"
 
+# Delete rows (copy-on-write; commits a new table version, prints nothing to stdout)
+./engine -c "DELETE FROM trips WHERE distance > 100;"
+
 # Execute a SQL script file (CSV rows written to stdout, logs/errors to stderr)
 ./engine -f script.sql > results.csv
 ```
 
 ### Synthetic Data & Performance Experiments
 
-1. **Activate the Python environment** (auto-initialized in the VS Code DevContainer, or created locally via `./setup-python-env.sh`):
+1. **Install the Python dependencies** (`faker`, from `requirements.txt`):
    ```bash
-   source setup-python-env.sh
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
    ```
 2. **Generate benchmark CSV datasets** (`generated_data/data_1mb.csv`, `data_10mb.csv`, `data_100mb.csv`, `data_1000mb.csv`):
    ```bash
@@ -70,11 +80,13 @@ Package the JAR first (`mvn package`), then use the `./engine` launcher script:
 
 ## Semester Roadmap
 
-| Milestone | Tag | Description | Status |
-|---|---|---|---|
-| **Exercise 1** | `v0.1` | Toolchain, GitHub Actions CI, Log4j2 CSV logging, PR workflow | Completed |
-| **Exercise 2** | `v0.2` | `SEMI` binary storage format, JSON catalogs, min/max partition pruning | Completed |
-| **Exercise 3** | `v0.3` | ANTLR4 SQL grammar, typed AST, catalog binder, SQL pretty-printer | Completed |
-| **Exercise 4** | `v0.4` | Volcano pipeline (`Scan`/`Filter`/`Project`), planner pruning, CLI front door | Completed |
-| **Exercise 5** | `v0.5` | Shaded JAR & `./engine` launcher, log self-analysis, streaming `COPY`, experiment design | Completed |
-| **Exercise 6** | `v0.6` | Reproducible synthetic data generator, experiment harness & log summarization (Part 1 release) | Completed |
+| Milestone | Title | Tag | Description | Status |
+|---|---|---|---|---|
+| **Exercise 1** | Team, Toolchain, and the First Green Pull Request | `v0.1` | Toolchain, GitHub Actions CI, Log4j2 CSV logging, PR workflow | Completed |
+| **Exercise 2** | Your Own Binary Format, Catalog, and Filtered Scans | `v0.2` | `SEMI` binary storage format, JSON catalogs, min/max partition pruning | Completed |
+| **Exercise 3** | Parsing SQL Text into a Bound AST | `v0.3` | ANTLR4 SQL grammar, typed AST, catalog binder, SQL pretty-printer | Completed |
+| **Exercise 4** | A Volcano Pipeline and the SQL Front Door | `v0.4` | Volcano pipeline (`Scan`/`Filter`/`Project`), planner pruning, CLI front door | Completed |
+| **Exercise 5** | Reading the Log, Owning the Code, Designing the Experiment | `v0.5` | Shaded JAR & `./engine` launcher, log self-analysis, streaming `COPY`, experiment design | Completed |
+| **Exercise 6** | Experiment, Report, and Demo | `v0.6` | Reproducible synthetic data generator, experiment harness & log summarization (Part 1 release) | Completed |
+| **Exercise 7** | DELETE, Copy-on-Write, and a Versioned Catalog | `v0.7` | `DELETE` with copy-on-write, versioned catalog, repeated `COPY`, snapshot pinning & partition retention | Completed |
+| **Exercise 8** | Concurrent Writers and Conflict Detection | `v0.8` | Commit-time conflict detection (`ConflictException`), `beforeCommit` test hook, deterministic two-writer tests | Completed |
