@@ -50,3 +50,10 @@
 To accomplish this, we change the naming scheme of partition files from `partition-<n>.dat` to `partition-<uuid>.dat`, where `<uuid>` is a randomly generated UUID. This ensures that each partition file has a unique name, preventing collisions and overwrites, without the need for a global counter.
 
 Orphans left by a crash are deleted at startup, together with leftover `.tmp` files.
+
+
+# 8. Validate at commit
+> Moved: someone else won. Throw a `ConflictException` (a `RuntimeException`); the statement aborts and leaves no visible change, because nothing it wrote is reachable until the swap. The partitions it already wrote become orphans, the same kind Exercise 7 discussed: think about how to clean them up.
+**Choice**: Orphaned paritions from aborted writes should be deleted immediately.
+
+**Reason**: They’re orphaned and won’t be used, so we’ll delete them immediately rather than leaving them for startup cleanup to reclaim more space.
