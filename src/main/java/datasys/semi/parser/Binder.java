@@ -1,5 +1,6 @@
 package datasys.semi.parser;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -14,12 +15,21 @@ import datasys.semi.models.JoinPredicate;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
+import datasys.semi.schema.ColumnResolver;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
+import datasys.semi.schema.ResolvedColumn;
+import datasys.semi.schema.TableSchema;
 
 /**
- * Validates AST statements against a pinned {@link Catalog} snapshot or
+ * Validates AST statements against pinned {@link Catalog} snapshots or
  * table-creation schema rules.
+ *
+ * <p>
+ * Multi-table {@code SELECT}s are bound against one snapshot per {@code FROM}
+ * table; unqualified column names are resolved through a
+ * {@link ColumnResolver}. Stateless apart from its engine reference; throw
+ * sites do not log (failures are logged by the executor boundary).
  */
 public final class Binder {
 
@@ -56,7 +66,7 @@ public final class Binder {
         switch (statement) {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bind(copy, engine.snapshot(copy.tableName()));
-            case SelectStatement select -> bind(select, engine.snapshot(select.tableNames().getFirst()));
+            case SelectStatement select -> bind(select, select.tableNames().stream().map(engine::snapshot).toList());
             case DeleteStatement delete -> bind(delete, engine.snapshot(delete.tableName()));
         }
     }
@@ -66,8 +76,9 @@ public final class Binder {
      * re-reading metadata from {@link StorageEngine}.
      *
      * @param statement the AST statement to validate
-     * @param snapshot  pinned catalog snapshot for the statement's target table
-     *                  (for SELECT: the first table of the {@code FROM} list)
+     * @param snapshot  pinned catalog snapshot for the statement's target table;
+     *                  a SELECT bound this way must list exactly that one table
+     *                  (use {@link #bind(SelectStatement, List)} for joins)
      * @throws IllegalArgumentException if validation fails or arguments are null
      */
     public void bind(Statement statement, Catalog snapshot) {
@@ -78,8 +89,42 @@ public final class Binder {
         switch (statement) {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bindCopy(copy, snapshot);
-            case SelectStatement select -> bindSelect(select, snapshot);
+            case SelectStatement select -> bind(select, Collections.singletonList(snapshot));
             case DeleteStatement delete -> bindDelete(delete, snapshot);
+        }
+    }
+
+    /**
+     * Validates a {@code SELECT} statement against one pinned snapshot per
+     * {@code FROM} table. Every column name is resolved against the schemas of
+     * all listed tables: it must occur in exactly one of them. Filters must carry
+     * a constant of their column's type; join predicates must connect two
+     * different tables through columns of the same type.
+     *
+     * @param statement the select statement
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order, one
+     *                  per table
+     * @throws IllegalArgumentException if an argument is null, the snapshots do
+     *                                  not match the {@code FROM} list, a table
+     *                                  repeats, a column is unknown or ambiguous,
+     *                                  a filter constant has the wrong type, or a
+     *                                  join is within one table or across types
+     */
+    public void bind(SelectStatement statement, List<Catalog> snapshots) {
+        if (statement == null || snapshots == null) {
+            throw new IllegalArgumentException("statement and snapshots must not be null");
+        }
+        requireMatchingSnapshots(statement.tableNames(), snapshots);
+        ColumnResolver resolver = new ColumnResolver(snapshots.stream()
+                .map(snapshot -> new TableSchema(snapshot.table(), snapshot.columnSpecs()))
+                .toList());
+
+        statement.columns().ifPresent(columns -> columns.forEach(resolver::resolve));
+        for (Predicate filter : statement.filters()) {
+            validatePredicateType(resolver.resolve(filter.columnName()).type(), filter.constant());
+        }
+        for (JoinPredicate join : statement.joins()) {
+            bindJoin(join, resolver);
         }
     }
 
@@ -120,69 +165,48 @@ public final class Binder {
     }
 
     /**
-     * Validates a {@code SELECT} statement against the pinned snapshot.
-     *
-     * <p>
-     * Interim rules until multi-table binding (Exercise 10 section 2): the
-     * {@code FROM} list must not repeat a table and must name exactly one table;
-     * every filter is validated like a single-table WHERE predicate; a join
-     * predicate is rejected because, with one table, both sides necessarily land
-     * in the same table.
-     *
-     * @param statement the select statement
-     * @param snapshot  pinned catalog snapshot of the first {@code FROM} table
-     * @throws IllegalArgumentException if the snapshot is null or mismatched, a
-     *                                  table repeats, more than one table is
-     *                                  listed, a column is unknown, a filter type
-     *                                  mismatches, or a join predicate is present
-     */
-    private void bindSelect(SelectStatement statement, Catalog snapshot) {
-        requireMatchingSnapshot(statement.tableNames().getFirst(), snapshot);
-        requireDistinctTables(statement.tableNames());
-        if (statement.tableNames().size() > 1) {
-            throw new IllegalArgumentException("multi-table SELECT is not supported yet: "
-                    + String.join(", ", statement.tableNames()));
-        }
-        for (Predicate filter : statement.filters()) {
-            bindFilter(filter, snapshot);
-        }
-        for (JoinPredicate join : statement.joins()) {
-            bindSingleTableJoin(join, snapshot);
-        }
-    }
-
-    /**
-     * Rejects a {@code FROM} list naming the same table twice. Without aliases a
-     * repeated table makes every one of its columns ambiguous; DuckDB rejects it
-     * as a duplicate alias.
+     * Verifies that the snapshots are exactly the {@code FROM}-list tables, in
+     * order.
      *
      * @param tableNames tables in {@code FROM}-list order
-     * @throws IllegalArgumentException if a table name occurs more than once
+     * @param snapshots  pinned catalog snapshots
+     * @throws IllegalArgumentException if the counts differ or a snapshot is
+     *                                  missing or for a different table
      */
-    private static void requireDistinctTables(List<String> tableNames) {
-        Set<String> seenTableNames = new HashSet<>();
-        for (String tableName : tableNames) {
-            if (!seenTableNames.add(tableName)) {
-                throw new IllegalArgumentException("duplicate table in FROM list: " + tableName);
-            }
+    private static void requireMatchingSnapshots(List<String> tableNames, List<Catalog> snapshots) {
+        if (snapshots.size() != tableNames.size()) {
+            throw new IllegalArgumentException("SELECT over " + String.join(", ", tableNames)
+                    + " needs one pinned snapshot per FROM table but got " + snapshots.size());
+        }
+        for (int position = 0; position < tableNames.size(); position++) {
+            requireMatchingSnapshot(tableNames.get(position), snapshots.get(position));
         }
     }
 
     /**
-     * Validates a join predicate over a single-table {@code FROM} list: both
-     * columns must exist, and the join is then rejected because its two sides
-     * resolve to the same table.
+     * Validates a join predicate: both sides resolve to existing, unambiguous
+     * columns of two different tables with the same type. Keys of different
+     * types would never be {@code equals} in the hash join, so such a join would
+     * silently return no rows; DuckDB would coerce, this engine rejects.
      *
      * @param join     the join predicate
-     * @param snapshot pinned catalog snapshot of the only table
-     * @throws IllegalArgumentException always: for an unknown column, or because
-     *                                  both sides land in the same table
+     * @param resolver column resolver over the {@code FROM}-list schemas
+     * @throws IllegalArgumentException if a column is unknown or ambiguous, both
+     *                                  sides belong to the same table, or their
+     *                                  types differ
      */
-    private static void bindSingleTableJoin(JoinPredicate join, Catalog snapshot) {
-        findColumn(join.leftColumn(), snapshot);
-        findColumn(join.rightColumn(), snapshot);
-        throw new IllegalArgumentException("join predicate " + join.leftColumn() + " = " + join.rightColumn()
-                + " must connect two different tables but both columns belong to " + snapshot.table());
+    private static void bindJoin(JoinPredicate join, ColumnResolver resolver) {
+        ResolvedColumn left = resolver.resolve(join.leftColumn());
+        ResolvedColumn right = resolver.resolve(join.rightColumn());
+        String joinText = join.leftColumn() + " = " + join.rightColumn();
+        if (left.tablePosition() == right.tablePosition()) {
+            throw new IllegalArgumentException("join predicate " + joinText
+                    + " must connect two different tables but both columns belong to " + left.tableName());
+        }
+        if (left.type() != right.type()) {
+            throw new IllegalArgumentException("join predicate " + joinText + " compares "
+                    + left.type() + " with " + right.type() + "; join columns must have the same type");
+        }
     }
 
     /**
