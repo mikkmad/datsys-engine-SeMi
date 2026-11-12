@@ -2,6 +2,7 @@ package datasys.semi.parser;
 
 import java.math.BigDecimal;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import datasys.semi.models.*;
 
@@ -63,12 +64,14 @@ public final class SqlPrinter {
     }
 
     /**
-     * Formats a SELECT statement as SQL text.
+     * Formats a SELECT statement as SQL text. Filters are printed before joins,
+     * all joined by {@code AND}; reparsing sorts them back into the same lists,
+     * so the round-trip property holds.
      *
      * @param statement the select statement
      * @return SQL text string
-     * @throws IllegalArgumentException if the predicate literal cannot be
-     *                                  represented in SQL
+     * @throws IllegalArgumentException if a filter literal cannot be represented
+     *                                  in SQL
      */
     private String printSelect(SelectStatement statement) {
         String columnsPart = "*";
@@ -76,12 +79,33 @@ public final class SqlPrinter {
             columnsPart = String.join(", ", statement.columns().get());
         }
 
-        if (statement.where().isEmpty()) {
-            return "SELECT " + columnsPart + " FROM " + statement.tableName() + ";";
-        }
+        String selectText = "SELECT " + columnsPart + " FROM " + String.join(", ", statement.tableNames());
+        String condition = printCondition(statement);
+        return condition.isEmpty() ? selectText + ";" : selectText + " WHERE " + condition + ";";
+    }
 
-        Predicate predicate = statement.where().get();
-        return "SELECT " + columnsPart + " FROM " + statement.tableName() + " WHERE " + printPredicate(predicate) + ";";
+    /**
+     * Formats the WHERE conjunction of a SELECT statement.
+     *
+     * @param statement the select statement
+     * @return filters then joins joined by {@code AND}; empty if there are none
+     * @throws IllegalArgumentException if a filter literal cannot be represented
+     *                                  in SQL
+     */
+    private String printCondition(SelectStatement statement) {
+        Stream<String> filterTexts = statement.filters().stream().map(this::printPredicate);
+        Stream<String> joinTexts = statement.joins().stream().map(SqlPrinter::printJoin);
+        return Stream.concat(filterTexts, joinTexts).collect(Collectors.joining(" AND "));
+    }
+
+    /**
+     * Formats an equi-join predicate as SQL text.
+     *
+     * @param join the join predicate
+     * @return text of the form {@code left = right}
+     */
+    private static String printJoin(JoinPredicate join) {
+        return join.leftColumn() + " = " + join.rightColumn();
     }
 
     /**

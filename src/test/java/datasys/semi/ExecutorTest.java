@@ -207,7 +207,7 @@ class ExecutorTest {
         assertEquals(1L, snapshotV1.version());
         Planner planner = new Planner(engine);
         Operator pinnedPlan = planner.plan(
-                new SelectStatement("trips", Optional.empty(), Optional.empty()), snapshotV1);
+                new SelectStatement(List.of("trips"), Optional.empty(), List.of(), List.of()), snapshotV1);
 
         // Commit v2 while pinnedPlan still holds snapshotV1
         executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));

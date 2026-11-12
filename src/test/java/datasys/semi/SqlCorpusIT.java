@@ -58,7 +58,17 @@ class SqlCorpusIT {
      * language extensions now accept. These must parse and bind successfully.
      */
     private static final Map<String, String> SUPERSEDED_BAD_CASES = Map.of(
-            "B0029", "Exercise 4 section 5: column lists (SELECT city FROM trips) are part of the grammar");
+            "B0029", "Exercise 4 section 5: column lists (SELECT city FROM trips) are part of the grammar",
+            "B0034", "Exercise 10 section 1: AND conjunctions of filters are part of the grammar");
+
+    /**
+     * Bad cases labelled PARSER against the Exercise 3 grammar that the Exercise
+     * 10 grammar now parses. They must still be rejected, but by the binder.
+     */
+    private static final Map<String, String> MOVED_TO_BINDER_BAD_CASES = Map.of(
+            "B0031", "Exercise 10 section 1: table lists parse; the binder rejects the repeated table",
+            "B0035", "Exercise 10 section 1: NULL parses as a join column; the binder rejects the unknown column",
+            "B0036", "Exercise 10 section 1: column = column parses as a join; the binder rejects a same-table join");
 
     // --- Binder Fixture ---
     private static final String TRIPS_TABLE = "trips";
@@ -105,7 +115,8 @@ class SqlCorpusIT {
      * Builds one dynamic test per bad case: lexer and parser cases must throw
      * SqlParseException with a position; binder cases must parse and then fail
      * binding with IllegalArgumentException. Cases listed in
-     * {@link #SUPERSEDED_BAD_CASES} must instead be accepted.
+     * {@link #SUPERSEDED_BAD_CASES} must instead be accepted, and cases in
+     * {@link #MOVED_TO_BINDER_BAD_CASES} must be rejected by the binder.
      *
      * @param dataDirectory temporary engine directory holding the trips table
      * @return dynamic tests in corpus order
@@ -162,8 +173,7 @@ class SqlCorpusIT {
             return;
         }
 
-        String stage = corpusCase.description().substring(0, corpusCase.description().indexOf(' '));
-        switch (stage) {
+        switch (expectedStage(corpusCase)) {
             case "LEXER", "PARSER" -> {
                 SqlParseException exception = assertThrows(SqlParseException.class,
                         () -> parser.parse(corpusCase.sqlText()));
@@ -175,8 +185,22 @@ class SqlCorpusIT {
                 assertThrows(IllegalArgumentException.class,
                         () -> statements.forEach(binder::bind));
             }
-            default -> throw new IllegalStateException("unknown stage label: " + stage);
+            default -> throw new IllegalStateException("unknown stage label: " + expectedStage(corpusCase));
         }
+    }
+
+    /**
+     * Returns the stage that must reject a bad case: its label, unless a later
+     * grammar extension moved the rejection to the binder.
+     *
+     * @param corpusCase the bad case under test
+     * @return {@code LEXER}, {@code PARSER} or {@code BINDER}
+     */
+    private static String expectedStage(CorpusCase corpusCase) {
+        if (MOVED_TO_BINDER_BAD_CASES.containsKey(corpusCase.caseId())) {
+            return "BINDER";
+        }
+        return corpusCase.description().substring(0, corpusCase.description().indexOf(' '));
     }
 
     /**
