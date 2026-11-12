@@ -428,4 +428,35 @@ class ExecutorTest {
                 .anyMatch(line -> line.contains(",ERROR,") && line.contains("failed line=1 col="));
         assertTrue(hasParseFailure, "expected parser ERROR line with statementNumber 0");
     }
+
+    /**
+     * Exercise 10.2: a multi-table SELECT pins one snapshot per FROM table and
+     * binds across all of them; until hash joins are planned it then fails
+     * explicitly instead of scanning only the first table. A bind failure on the
+     * second table's columns and the unsupported failure both release every pin.
+     */
+    @Test
+    void multiTableSelectBindsAcrossTablesAndReleasesAllPins() {
+        Executor executor = new Executor(engine, new PrintStream(new ByteArrayOutputStream(), true,
+                StandardCharsets.UTF_8));
+        executor.execute("""
+                CREATE TABLE orders (o_orderkey LONG, o_custname STRING);
+                CREATE TABLE customers (c_name STRING, c_city STRING);
+                """);
+
+        UnsupportedOperationException unsupported = assertThrows(UnsupportedOperationException.class,
+                () -> executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name;"));
+        assertEquals("multi-table SELECT execution is not supported yet: orders, customers",
+                unsupported.getMessage());
+
+        IllegalArgumentException bindFailure = assertThrows(IllegalArgumentException.class,
+                () -> executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name AND c_city = 1;"));
+        assertTrue(bindFailure.getMessage().contains("constant type does not match"), bindFailure.getMessage());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> executor.execute("SELECT * FROM orders, missing WHERE o_custname = m_name;"));
+
+        assertEquals(0, engine.pinnedReaderCount("orders", engine.snapshot("orders").version()));
+        assertEquals(0, engine.pinnedReaderCount("customers", engine.snapshot("customers").version()));
+    }
 }

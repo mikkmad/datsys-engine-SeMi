@@ -32,8 +32,8 @@ import datasys.semi.util.LogSanitizer;
  *
  * <p>
  * Maintains statement sequencing in the SLF4J MDC ({@code statementNumber}),
- * pins a {@link Catalog} snapshot at statement start before binding and
- * releases it when the statement ends, dispatches DDL, COPY and DELETE
+ * pins a {@link Catalog} snapshot at statement start before binding (one per
+ * {@code FROM} table for a SELECT) and releases it when the statement ends, dispatches DDL, COPY and DELETE
  * statements to the storage engine, and runs SELECT statements as
  * Volcano operator pipelines. Output from SELECT is emitted as headerless CSV
  * to the configured output stream. Execution halts immediately upon
@@ -148,17 +148,14 @@ public final class Executor {
         try {
             SelectStatement select = parseSingleSelect(sql);
             long started = System.nanoTime();
-            Catalog snapshot = engine.pinSnapshot(select.tableNames().getFirst());
-            try {
-                binder.bind(select, snapshot);
-                Operator plan = planner.plan(select, snapshot);
+            List<Object[]> rows = new ArrayList<>();
+            runPinnedAll(select.tableNames(), snapshots -> {
+                Operator plan = bindAndPlanSelect(select, snapshots);
                 ScanStats stats = planner.lastScanStats();
-                List<Object[]> rows = drainToList(plan);
+                rows.addAll(drainToList(plan));
                 logSelectSummary(select.tableNames().getFirst(), rows.size(), stats, started);
-                return rows;
-            } finally {
-                engine.releaseSnapshot(snapshot);
-            }
+            });
+            return rows;
         } catch (RuntimeException exception) {
             LOGGER.error("statement_failed operation=SELECT reason={}",
                     LogSanitizer.sanitize(exception.getMessage()));
@@ -211,10 +208,8 @@ public final class Executor {
                 binder.bind(copy, snapshot);
                 executeCopy(copy, snapshot, started);
             });
-            case SelectStatement select -> runPinned(select.tableNames().getFirst(), snapshot -> {
-                binder.bind(select, snapshot);
-                executeSelect(select, snapshot, started);
-            });
+            case SelectStatement select -> runPinnedAll(select.tableNames(),
+                    snapshots -> executeSelect(select, snapshots, started));
             case DeleteStatement delete -> runPinned(delete.tableName(), snapshot -> {
                 binder.bind(delete, snapshot);
                 executeDelete(delete, snapshot, started);
@@ -238,6 +233,53 @@ public final class Executor {
         } finally {
             engine.releaseSnapshot(snapshot);
         }
+    }
+
+    /**
+     * Pins the current catalog version of every listed table, in order, runs
+     * {@code action} against the pinned snapshots, and releases every pin when
+     * the action completes or fails. If pinning a later table fails, the pins
+     * already taken are released before the failure propagates.
+     *
+     * @param tableNames tables to pin, in {@code FROM}-list order
+     * @param action     statement body executed against the pinned snapshots
+     * @throws IllegalArgumentException if a table does not exist
+     */
+    private void runPinnedAll(List<String> tableNames, Consumer<List<Catalog>> action) {
+        List<Catalog> snapshots = new ArrayList<>(tableNames.size());
+        try {
+            for (String tableName : tableNames) {
+                snapshots.add(engine.pinSnapshot(tableName));
+            }
+            action.accept(List.copyOf(snapshots));
+        } finally {
+            snapshots.forEach(engine::releaseSnapshot);
+        }
+    }
+
+    /**
+     * Binds a {@code SELECT} against its pinned snapshots and plans it.
+     *
+     * <p>
+     * Temporary guard until hash join chains are planned (Exercise 10 section
+     * 4): the single-table planner would scan only the first {@code FROM} table,
+     * so a bound multi-table statement is rejected explicitly instead of
+     * returning wrong rows.
+     *
+     * @param statement SELECT statement
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order
+     * @return root operator of the planned pipeline
+     * @throws IllegalArgumentException      if binding or planning fails
+     * @throws UnsupportedOperationException if the statement lists more than one
+     *                                       table
+     */
+    private Operator bindAndPlanSelect(SelectStatement statement, List<Catalog> snapshots) {
+        binder.bind(statement, snapshots);
+        if (snapshots.size() > 1) {
+            throw new UnsupportedOperationException("multi-table SELECT execution is not supported yet: "
+                    + String.join(", ", statement.tableNames()));
+        }
+        return planner.plan(statement, snapshots.getFirst());
     }
 
     /**
@@ -308,11 +350,12 @@ public final class Executor {
      * its operator pipeline to output.
      *
      * @param statement SELECT statement
-     * @param snapshot  pinned catalog snapshot at statement start
+     * @param snapshots pinned catalog snapshots at statement start, one per
+     *                  {@code FROM} table
      * @param started   nano timestamp when execution started
      */
-    private void executeSelect(SelectStatement statement, Catalog snapshot, long started) {
-        Operator plan = planner.plan(statement, snapshot);
+    private void executeSelect(SelectStatement statement, List<Catalog> snapshots, long started) {
+        Operator plan = bindAndPlanSelect(statement, snapshots);
         ScanStats stats = planner.lastScanStats();
         long rowsOut = drainToOutput(plan);
         logSelectSummary(statement.tableNames().getFirst(), rowsOut, stats, started);

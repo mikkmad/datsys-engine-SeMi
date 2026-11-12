@@ -279,9 +279,10 @@ class BinderIT {
         }
 
         /**
-         * Exercise 10.1 interim binder rules: an AND chain of valid filters binds;
-         * a repeated table, a multi-table FROM list, a same-table join, and an
-         * invalid filter inside a chain are rejected with IllegalArgumentException.
+         * Exercise 10 binder rules through the engine-pinning entry point: an AND
+         * chain of valid filters and a two-table join bind; a repeated table, a
+         * same-table join, an unknown join column, an invalid filter inside a chain
+         * and an unknown table are rejected with IllegalArgumentException.
          */
         @Test
         void selectWithTableListsAndConjunctionsBindsOrRejects(@TempDir Path tempDir) {
@@ -303,7 +304,7 @@ class BinderIT {
 
                 SelectStatement twoTables = new SelectStatement(List.of("trips", "cities"), Optional.empty(),
                                 List.of(), List.of(new JoinPredicate("city", "ct_city")));
-                assertThrows(IllegalArgumentException.class, () -> binder.bind(twoTables));
+                assertDoesNotThrow(() -> binder.bind(twoTables));
 
                 SelectStatement sameTableJoin = new SelectStatement(List.of("trips"), Optional.empty(),
                                 List.of(), List.of(new JoinPredicate("distance", "distance")));
