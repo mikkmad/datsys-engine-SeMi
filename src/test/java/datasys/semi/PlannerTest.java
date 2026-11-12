@@ -65,8 +65,8 @@ class PlannerTest {
      */
     @Test
     void plannerPruningKeepsMatchingPartitionsOnSortedGoldenData() {
-        SelectStatement statement = new SelectStatement("trips", Optional.empty(),
-                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)));
+        SelectStatement statement = new SelectStatement(List.of("trips"), Optional.empty(),
+                List.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)), List.of());
 
         Operator plan = planner.plan(statement, engine.snapshot("trips"));
         ScanStats stats = planner.lastScanStats();
@@ -92,8 +92,8 @@ class PlannerTest {
 
         // Partition 0: distance 12..31. distance < 50 keeps partition 0 and drops 1, 2,
         // 3.
-        SelectStatement lowerBound = new SelectStatement("trips", Optional.empty(),
-                Optional.of(new Predicate("distance", Comparison.LESS_THAN, 50L)));
+        SelectStatement lowerBound = new SelectStatement(List.of("trips"), Optional.empty(),
+                List.of(new Predicate("distance", Comparison.LESS_THAN, 50L)), List.of());
         planner.plan(lowerBound, snapshot);
 
         ScanStats lowerStats = planner.lastScanStats();
@@ -103,8 +103,8 @@ class PlannerTest {
         assertEquals(1L, lowerStats.version());
 
         // Fully pruned query: distance > 500 matches none of the partitions.
-        SelectStatement none = new SelectStatement("trips", Optional.empty(),
-                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 500L)));
+        SelectStatement none = new SelectStatement(List.of("trips"), Optional.empty(),
+                List.of(new Predicate("distance", Comparison.GREATER_THAN, 500L)), List.of());
         Operator planNone = planner.plan(none, snapshot);
 
         ScanStats noneStats = planner.lastScanStats();
@@ -127,8 +127,8 @@ class PlannerTest {
         Catalog snapshot = engine.snapshot("trips");
 
         // 1. WHERE -> Filter over Scan
-        SelectStatement withWhere = new SelectStatement("trips", Optional.empty(),
-                Optional.of(new Predicate("city", Comparison.EQUALS, "Odense")));
+        SelectStatement withWhere = new SelectStatement(List.of("trips"), Optional.empty(),
+                List.of(new Predicate("city", Comparison.EQUALS, "Odense")), List.of());
 
         Operator filteredPlan = planner.plan(withWhere, snapshot);
         assertInstanceOf(FilterOperator.class, filteredPlan);
@@ -143,7 +143,8 @@ class PlannerTest {
         assertEquals("Odense", filter.predicate().constant());
 
         // 2. No WHERE -> bare Scan over all partitions
-        SelectStatement withoutWhere = new SelectStatement("trips", Optional.empty(), Optional.empty());
+        SelectStatement withoutWhere = new SelectStatement(List.of("trips"), Optional.empty(),
+                List.of(), List.of());
 
         Operator barePlan = planner.plan(withoutWhere, snapshot);
         assertInstanceOf(ScanOperator.class, barePlan);
@@ -170,13 +171,15 @@ class PlannerTest {
 
         assertThrows(IllegalArgumentException.class, () -> planner.plan(null, snapshot));
         assertThrows(IllegalArgumentException.class,
-                () -> planner.plan(new SelectStatement("trips", Optional.empty(), Optional.empty()), null));
+                () -> planner.plan(new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(), List.of()), null));
 
-        SelectStatement unknownTable = new SelectStatement("nonexistent", Optional.empty(), Optional.empty());
+        SelectStatement unknownTable = new SelectStatement(List.of("nonexistent"), Optional.empty(),
+                List.of(), List.of());
         assertThrows(IllegalArgumentException.class, () -> planner.plan(unknownTable, snapshot));
 
-        SelectStatement unknownColumn = new SelectStatement("trips", Optional.empty(),
-                Optional.of(new Predicate("nonexistent_col", Comparison.EQUALS, "val")));
+        SelectStatement unknownColumn = new SelectStatement(List.of("trips"), Optional.empty(),
+                List.of(new Predicate("nonexistent_col", Comparison.EQUALS, "val")), List.of());
         assertThrows(IllegalArgumentException.class, () -> planner.plan(unknownColumn, snapshot));
     }
 
@@ -189,7 +192,7 @@ class PlannerTest {
         String session = UUID.randomUUID().toString();
         MDC.put("sessionId", session);
         try {
-            planner.plan(new SelectStatement("trips", Optional.empty(), Optional.empty()),
+            planner.plan(new SelectStatement(List.of("trips"), Optional.empty(), List.of(), List.of()),
                     engine.snapshot("trips"));
         } finally {
             MDC.remove("sessionId");
@@ -219,8 +222,8 @@ class PlannerTest {
 
         String session = UUID.randomUUID().toString();
         MDC.put("sessionId", session);
-        SelectStatement statement = new SelectStatement(
-                "trips", Optional.empty(), Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)));
+        SelectStatement statement = new SelectStatement(List.of("trips"), Optional.empty(),
+                List.of(new Predicate("distance", Comparison.GREATER_THAN, 200L)), List.of());
         try {
             Operator plan = planner.plan(statement, modifiedSnapshot);
             ScanOperator scan = (ScanOperator) ((FilterOperator) plan).child();
@@ -233,5 +236,38 @@ class PlannerTest {
         assertTrue(logLines.stream()
                 .filter(line -> line.contains("," + session + ","))
                 .anyMatch(line -> line.contains("table=trips partition=0 decision=READ reason=missingStats")));
+    }
+
+    /**
+     * Exercise 10.1: an AND chain of filters on one table stacks one filter per
+     * predicate above a scan of the partitions that every filter keeps.
+     * distance > 50 prunes partition 0, price < 250.0 prunes partition 3.
+     */
+    @Test
+    void conjunctionOfFiltersIntersectsPruningAndStacksFilters() {
+        SelectStatement statement = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                new Predicate("distance", Comparison.GREATER_THAN, 50L),
+                new Predicate("price", Comparison.LESS_THAN, 250.0)), List.of());
+
+        Operator plan = planner.plan(statement, engine.snapshot("trips"));
+        ScanStats stats = planner.lastScanStats();
+        assertEquals(4, stats.partitionsTotal());
+        assertEquals(2, stats.partitionsRead());
+        assertEquals(2, stats.partitionsPruned());
+
+        FilterOperator priceFilter = assertInstanceOf(FilterOperator.class, plan);
+        assertEquals(2, priceFilter.predicate().columnIndex());
+        FilterOperator distanceFilter = assertInstanceOf(FilterOperator.class, priceFilter.child());
+        assertEquals(1, distanceFilter.predicate().columnIndex());
+        ScanOperator scan = assertInstanceOf(ScanOperator.class, distanceFilter.child());
+        assertEquals(List.of(1, 2), scan.partitionNumbers());
+
+        List<Long> distances = new ArrayList<>();
+        plan.open();
+        for (Object[] row = plan.next(); row != null; row = plan.next()) {
+            distances.add((Long) row[1]);
+        }
+        plan.close();
+        assertEquals(List.of(88L, 95L, 140L), distances);
     }
 }

@@ -62,7 +62,7 @@ class SnapshotReadTest {
         Catalog pinnedV1 = engine.pinSnapshot("trips");
         try {
             Operator plan = new Planner(engine).plan(
-                    new SelectStatement("trips", Optional.empty(), Optional.empty()), pinnedV1);
+                    new SelectStatement(List.of("trips"), Optional.empty(), List.of(), List.of()), pinnedV1);
             plan.open();
             List<Object[]> rows = new ArrayList<>();
             try {

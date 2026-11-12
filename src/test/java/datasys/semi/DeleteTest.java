@@ -105,7 +105,8 @@ class DeleteTest {
 
         DeletePlan deletePlan = planner.planDelete(new DeleteStatement("trips", Optional.of(predicate)), snapshot);
         FilterOperator selectPlan = (FilterOperator) planner.plan(
-                new SelectStatement("trips", Optional.empty(), Optional.of(predicate)), snapshot);
+                new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(predicate), List.of()), snapshot);
 
         assertEquals(List.of(2, 3), deletePlan.rewriteSet());
         assertEquals(((ScanOperator) selectPlan.child()).partitionNumbers(), deletePlan.rewriteSet());

@@ -57,7 +57,8 @@ class SqlPrinterTest {
 
         @Test
         void roundTripSelectStatementsWithoutWhere() {
-                SelectStatement selectAll = new SelectStatement("trips", Optional.empty(), Optional.empty());
+                SelectStatement selectAll = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(), List.of());
                 assertRoundTrip(selectAll);
         }
 
@@ -71,48 +72,49 @@ class SqlPrinterTest {
         @Test
         void roundTripSelectStatementsWithWhereComparisonsAndTypes() {
                 // String EQUALS
-                SelectStatement strEquals = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("city", Comparison.EQUALS, "Copenhagen")));
+                SelectStatement strEquals = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("city", Comparison.EQUALS, "Copenhagen")), List.of());
                 assertRoundTrip(strEquals);
 
                 // String LESS_THAN
-                SelectStatement strLess = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("city", Comparison.LESS_THAN, "Odense")));
+                SelectStatement strLess = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("city", Comparison.LESS_THAN, "Odense")), List.of());
                 assertRoundTrip(strLess);
 
                 // String GREATER_THAN
-                SelectStatement strGreater = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("city", Comparison.GREATER_THAN, "Aalborg")));
+                SelectStatement strGreater = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("city", Comparison.GREATER_THAN, "Aalborg")), List.of());
                 assertRoundTrip(strGreater);
 
                 // Long EQUALS (positive)
-                SelectStatement longEquals = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("distance", Comparison.EQUALS, 100L)));
+                SelectStatement longEquals = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("distance", Comparison.EQUALS, 100L)), List.of());
                 assertRoundTrip(longEquals);
 
                 // Long LESS_THAN (negative)
-                SelectStatement longNeg = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("distance", Comparison.LESS_THAN, -50L)));
+                SelectStatement longNeg = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("distance", Comparison.LESS_THAN, -50L)), List.of());
                 assertRoundTrip(longNeg);
 
                 // Long GREATER_THAN (zero)
-                SelectStatement longZero = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("distance", Comparison.GREATER_THAN, 0L)));
+                SelectStatement longZero = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("distance", Comparison.GREATER_THAN, 0L)), List.of());
                 assertRoundTrip(longZero);
 
                 // Double EQUALS (positive)
-                SelectStatement doubleEquals = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("price", Comparison.EQUALS, 99.99)));
+                SelectStatement doubleEquals = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("price", Comparison.EQUALS, 99.99)), List.of());
                 assertRoundTrip(doubleEquals);
 
                 // Double LESS_THAN (negative)
-                SelectStatement doubleNeg = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("price", Comparison.LESS_THAN, -12.5)));
+                SelectStatement doubleNeg = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("price", Comparison.LESS_THAN, -12.5)), List.of());
                 assertRoundTrip(doubleNeg);
 
                 // Double GREATER_THAN (whole-value double)
-                SelectStatement doubleWhole = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("price", Comparison.GREATER_THAN, 300.0)));
+                SelectStatement doubleWhole = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("price", Comparison.GREATER_THAN, 300.0)), List.of());
                 assertRoundTrip(doubleWhole);
         }
 
@@ -159,7 +161,7 @@ class SqlPrinterTest {
                 assertEquals("0.0", printDoubleLiteral(0.0));
 
                 Statement reparsedNegativeZero = parser.parse(printer.print(selectWithPrice(-0.0))).getFirst();
-                Object constant = ((SelectStatement) reparsedNegativeZero).where().orElseThrow().constant();
+                Object constant = ((SelectStatement) reparsedNegativeZero).filters().getFirst().constant();
                 assertEquals(0, Double.compare(-0.0, (Double) constant));
                 assertRoundTrip(selectWithPrice(-0.0));
                 assertRoundTrip(selectWithPrice(0.0));
@@ -168,8 +170,9 @@ class SqlPrinterTest {
         @Test
         void longExtremesRoundTrip() {
                 for (long value : List.of(Long.MIN_VALUE, Long.MAX_VALUE, -1L, 0L)) {
-                        SelectStatement select = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                        new Predicate("distance", Comparison.EQUALS, value)));
+                        SelectStatement select = new SelectStatement(List.of("trips"), Optional.empty(),
+                                List.of(
+                                        new Predicate("distance", Comparison.EQUALS, value)), List.of());
                         assertRoundTrip(select);
                 }
         }
@@ -217,8 +220,8 @@ class SqlPrinterTest {
                 DeleteStatement deleteQuote = deleteWithPredicate(new Predicate("city", Comparison.EQUALS, "a'b"));
                 assertThrows(IllegalArgumentException.class, () -> printer.print(deleteQuote));
 
-                SelectStatement selectQuote = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("city", Comparison.EQUALS, "a'b")));
+                SelectStatement selectQuote = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("city", Comparison.EQUALS, "a'b")), List.of());
                 assertThrows(IllegalArgumentException.class, () -> printer.print(selectQuote));
 
                 // Newlines in string literal
@@ -238,8 +241,8 @@ class SqlPrinterTest {
         }
 
         private SelectStatement selectWithPrice(double price) {
-                return new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("price", Comparison.EQUALS, price)));
+                return new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("price", Comparison.EQUALS, price)), List.of());
         }
 
         private String printDoubleLiteral(double value) {

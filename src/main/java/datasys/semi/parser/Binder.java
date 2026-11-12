@@ -10,6 +10,7 @@ import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
 import datasys.semi.models.CreateTableStatement;
 import datasys.semi.models.DeleteStatement;
+import datasys.semi.models.JoinPredicate;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
@@ -55,7 +56,7 @@ public final class Binder {
         switch (statement) {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bind(copy, engine.snapshot(copy.tableName()));
-            case SelectStatement select -> bind(select, engine.snapshot(select.tableName()));
+            case SelectStatement select -> bind(select, engine.snapshot(select.tableNames().getFirst()));
             case DeleteStatement delete -> bind(delete, engine.snapshot(delete.tableName()));
         }
     }
@@ -66,6 +67,7 @@ public final class Binder {
      *
      * @param statement the AST statement to validate
      * @param snapshot  pinned catalog snapshot for the statement's target table
+     *                  (for SELECT: the first table of the {@code FROM} list)
      * @throws IllegalArgumentException if validation fails or arguments are null
      */
     public void bind(Statement statement, Catalog snapshot) {
@@ -118,16 +120,69 @@ public final class Binder {
     }
 
     /**
-     * Validates that the target table and optional predicate in a {@code SELECT}
-     * statement exist in the pinned snapshot and match types.
+     * Validates a {@code SELECT} statement against the pinned snapshot.
+     *
+     * <p>
+     * Interim rules until multi-table binding (Exercise 10 section 2): the
+     * {@code FROM} list must not repeat a table and must name exactly one table;
+     * every filter is validated like a single-table WHERE predicate; a join
+     * predicate is rejected because, with one table, both sides necessarily land
+     * in the same table.
      *
      * @param statement the select statement
-     * @param snapshot  pinned catalog snapshot of the target table
-     * @throws IllegalArgumentException if the snapshot is null, a column is
-     *                                  unknown, or the predicate type mismatches
+     * @param snapshot  pinned catalog snapshot of the first {@code FROM} table
+     * @throws IllegalArgumentException if the snapshot is null or mismatched, a
+     *                                  table repeats, more than one table is
+     *                                  listed, a column is unknown, a filter type
+     *                                  mismatches, or a join predicate is present
      */
     private void bindSelect(SelectStatement statement, Catalog snapshot) {
-        bindTableAndWhere(statement.tableName(), statement.where(), snapshot);
+        requireMatchingSnapshot(statement.tableNames().getFirst(), snapshot);
+        requireDistinctTables(statement.tableNames());
+        if (statement.tableNames().size() > 1) {
+            throw new IllegalArgumentException("multi-table SELECT is not supported yet: "
+                    + String.join(", ", statement.tableNames()));
+        }
+        for (Predicate filter : statement.filters()) {
+            bindFilter(filter, snapshot);
+        }
+        for (JoinPredicate join : statement.joins()) {
+            bindSingleTableJoin(join, snapshot);
+        }
+    }
+
+    /**
+     * Rejects a {@code FROM} list naming the same table twice. Without aliases a
+     * repeated table makes every one of its columns ambiguous; DuckDB rejects it
+     * as a duplicate alias.
+     *
+     * @param tableNames tables in {@code FROM}-list order
+     * @throws IllegalArgumentException if a table name occurs more than once
+     */
+    private static void requireDistinctTables(List<String> tableNames) {
+        Set<String> seenTableNames = new HashSet<>();
+        for (String tableName : tableNames) {
+            if (!seenTableNames.add(tableName)) {
+                throw new IllegalArgumentException("duplicate table in FROM list: " + tableName);
+            }
+        }
+    }
+
+    /**
+     * Validates a join predicate over a single-table {@code FROM} list: both
+     * columns must exist, and the join is then rejected because its two sides
+     * resolve to the same table.
+     *
+     * @param join     the join predicate
+     * @param snapshot pinned catalog snapshot of the only table
+     * @throws IllegalArgumentException always: for an unknown column, or because
+     *                                  both sides land in the same table
+     */
+    private static void bindSingleTableJoin(JoinPredicate join, Catalog snapshot) {
+        findColumn(join.leftColumn(), snapshot);
+        findColumn(join.rightColumn(), snapshot);
+        throw new IllegalArgumentException("join predicate " + join.leftColumn() + " = " + join.rightColumn()
+                + " must connect two different tables but both columns belong to " + snapshot.table());
     }
 
     /**
@@ -159,13 +214,36 @@ public final class Binder {
             return;
         }
 
-        Predicate predicate = where.get();
-        ColumnSpec matchedColumn = snapshot.columnSpecs().stream()
-                .filter(column -> column.name().equals(predicate.columnName()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("unknown column: " + predicate.columnName()));
+        bindFilter(where.get(), snapshot);
+    }
 
-        validatePredicateType(matchedColumn.type(), predicate.constant());
+    /**
+     * Validates that a filter references an existing column and carries a
+     * constant of that column's type.
+     *
+     * @param filter   the column-to-constant predicate
+     * @param snapshot pinned catalog snapshot of the filtered table
+     * @throws IllegalArgumentException if the column is unknown or the constant
+     *                                  type does not match the column type
+     */
+    private void bindFilter(Predicate filter, Catalog snapshot) {
+        ColumnSpec matchedColumn = findColumn(filter.columnName(), snapshot);
+        validatePredicateType(matchedColumn.type(), filter.constant());
+    }
+
+    /**
+     * Looks up a column by name in the snapshot's schema.
+     *
+     * @param columnName column name to resolve
+     * @param snapshot   pinned catalog snapshot
+     * @return the matching column specification
+     * @throws IllegalArgumentException if no column has that name
+     */
+    private static ColumnSpec findColumn(String columnName, Catalog snapshot) {
+        return snapshot.columnSpecs().stream()
+                .filter(column -> column.name().equals(columnName))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("unknown column: " + columnName));
     }
 
     /**

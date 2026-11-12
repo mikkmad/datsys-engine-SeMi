@@ -51,20 +51,22 @@ class BinderIT {
                 assertDoesNotThrow(() -> binder.bind(copy));
 
                 // SELECT without WHERE on existing table binds
-                SelectStatement selectNoWhere = new SelectStatement("trips", Optional.empty(), Optional.empty());
+                SelectStatement selectNoWhere = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(), List.of());
                 assertDoesNotThrow(() -> binder.bind(selectNoWhere));
 
                 // SELECT with valid WHERE conditions across all types binds
-                SelectStatement selectCity = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("city", Comparison.EQUALS, "Copenhagen")));
+                SelectStatement selectCity = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("city", Comparison.EQUALS, "Copenhagen")), List.of());
                 assertDoesNotThrow(() -> binder.bind(selectCity));
 
-                SelectStatement selectDistance = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("distance", Comparison.GREATER_THAN, 100L)));
+                SelectStatement selectDistance = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("distance", Comparison.GREATER_THAN, 100L)), List.of());
                 assertDoesNotThrow(() -> binder.bind(selectDistance));
 
-                SelectStatement selectPrice = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("price", Comparison.LESS_THAN, 50.0)));
+                SelectStatement selectPrice = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("price", Comparison.LESS_THAN, 50.0)), List.of());
                 assertDoesNotThrow(() -> binder.bind(selectPrice));
 
                 // DELETE without WHERE on existing table binds
@@ -90,7 +92,8 @@ class BinderIT {
                 StorageEngine engine = new StorageEngine(tempDir);
                 Binder binder = new Binder(engine);
 
-                SelectStatement selectUnknownTable = new SelectStatement("non_existent", Optional.empty(), Optional.empty());
+                SelectStatement selectUnknownTable = new SelectStatement(List.of("non_existent"), Optional.empty(),
+                        List.of(), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(selectUnknownTable));
 
                 CopyStatement copyUnknownTable = new CopyStatement("non_existent", "data.csv");
@@ -175,8 +178,9 @@ class BinderIT {
                 engine.createTable("trips", TRIPS_SCHEMA);
                 Binder binder = new Binder(engine);
 
-                SelectStatement selectUnknownColumn = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("non_existent_column", Comparison.EQUALS, "test")));
+                SelectStatement selectUnknownColumn = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("non_existent_column", Comparison.EQUALS, "test")), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(selectUnknownColumn));
         }
 
@@ -187,33 +191,39 @@ class BinderIT {
                 Binder binder = new Binder(engine);
 
                 // Long column with String constant
-                SelectStatement distMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("distance", Comparison.EQUALS, "x")));
+                SelectStatement distMismatch = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("distance", Comparison.EQUALS, "x")), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(distMismatch));
 
                 // String column with Long constant
-                SelectStatement cityMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("city", Comparison.EQUALS, 100L)));
+                SelectStatement cityMismatch = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("city", Comparison.EQUALS, 100L)), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(cityMismatch));
 
                 // Double column with String constant
-                SelectStatement priceMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("price", Comparison.EQUALS, "50.0")));
+                SelectStatement priceMismatch = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("price", Comparison.EQUALS, "50.0")), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(priceMismatch));
 
                 // Double column with Long constant
-                SelectStatement priceLongMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("price", Comparison.EQUALS, 50L)));
+                SelectStatement priceLongMismatch = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("price", Comparison.EQUALS, 50L)), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(priceLongMismatch));
 
                 // Long column with Double constant
-                SelectStatement distDoubleMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("distance", Comparison.EQUALS, 100.5)));
+                SelectStatement distDoubleMismatch = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("distance", Comparison.EQUALS, 100.5)), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(distDoubleMismatch));
 
                 // String column with Double constant
-                SelectStatement cityDoubleMismatch = new SelectStatement("trips", Optional.empty(), Optional.of(
-                                new Predicate("city", Comparison.EQUALS, 50.0)));
+                SelectStatement cityDoubleMismatch = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(
+                                new Predicate("city", Comparison.EQUALS, 50.0)), List.of());
                 assertThrows(IllegalArgumentException.class, () -> binder.bind(cityDoubleMismatch));
         }
 
@@ -266,5 +276,55 @@ class BinderIT {
                                 .filter(line -> line.contains("," + session + ","))
                                 .anyMatch(line -> line.contains(",ERROR,"));
                 assertFalse(hasErrorLine, "Binder must not log at the throw site");
+        }
+
+        /**
+         * Exercise 10.1 interim binder rules: an AND chain of valid filters binds;
+         * a repeated table, a multi-table FROM list, a same-table join, and an
+         * invalid filter inside a chain are rejected with IllegalArgumentException.
+         */
+        @Test
+        void selectWithTableListsAndConjunctionsBindsOrRejects(@TempDir Path tempDir) {
+                StorageEngine engine = new StorageEngine(tempDir);
+                engine.createTable("trips", TRIPS_SCHEMA);
+                engine.createTable("cities", List.of(new ColumnSpec("ct_city", ColumnType.STRING)));
+                Binder binder = new Binder(engine);
+
+                SelectStatement twoFilters = new SelectStatement(List.of("trips"), Optional.empty(), List.of(
+                                new Predicate("distance", Comparison.GREATER_THAN, 100L),
+                                new Predicate("price", Comparison.LESS_THAN, 50.0)), List.of());
+                assertDoesNotThrow(() -> binder.bind(twoFilters));
+
+                SelectStatement repeatedTable = new SelectStatement(List.of("trips", "trips"), Optional.empty(),
+                                List.of(), List.of());
+                assertEquals("duplicate table in FROM list: trips",
+                                assertThrows(IllegalArgumentException.class, () -> binder.bind(repeatedTable))
+                                                .getMessage());
+
+                SelectStatement twoTables = new SelectStatement(List.of("trips", "cities"), Optional.empty(),
+                                List.of(), List.of(new JoinPredicate("city", "ct_city")));
+                assertThrows(IllegalArgumentException.class, () -> binder.bind(twoTables));
+
+                SelectStatement sameTableJoin = new SelectStatement(List.of("trips"), Optional.empty(),
+                                List.of(), List.of(new JoinPredicate("distance", "distance")));
+                IllegalArgumentException sameTable = assertThrows(IllegalArgumentException.class,
+                                () -> binder.bind(sameTableJoin));
+                assertTrue(sameTable.getMessage().contains("two different tables"), sameTable.getMessage());
+
+                SelectStatement unknownJoinColumn = new SelectStatement(List.of("trips"), Optional.empty(),
+                                List.of(), List.of(new JoinPredicate("distance", "missing")));
+                assertEquals("unknown column: missing",
+                                assertThrows(IllegalArgumentException.class, () -> binder.bind(unknownJoinColumn))
+                                                .getMessage());
+
+                SelectStatement secondFilterMismatch = new SelectStatement(List.of("trips"), Optional.empty(),
+                                List.of(new Predicate("distance", Comparison.GREATER_THAN, 100L),
+                                                new Predicate("price", Comparison.LESS_THAN, "cheap")),
+                                List.of());
+                assertThrows(IllegalArgumentException.class, () -> binder.bind(secondFilterMismatch));
+
+                SelectStatement unknownTable = new SelectStatement(List.of("missing", "trips"), Optional.empty(),
+                                List.of(), List.of());
+                assertThrows(IllegalArgumentException.class, () -> binder.bind(unknownTable));
         }
 }

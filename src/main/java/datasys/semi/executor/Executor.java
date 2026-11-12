@@ -148,13 +148,13 @@ public final class Executor {
         try {
             SelectStatement select = parseSingleSelect(sql);
             long started = System.nanoTime();
-            Catalog snapshot = engine.pinSnapshot(select.tableName());
+            Catalog snapshot = engine.pinSnapshot(select.tableNames().getFirst());
             try {
                 binder.bind(select, snapshot);
                 Operator plan = planner.plan(select, snapshot);
                 ScanStats stats = planner.lastScanStats();
                 List<Object[]> rows = drainToList(plan);
-                logSelectSummary(select.tableName(), rows.size(), stats, started);
+                logSelectSummary(select.tableNames().getFirst(), rows.size(), stats, started);
                 return rows;
             } finally {
                 engine.releaseSnapshot(snapshot);
@@ -211,7 +211,7 @@ public final class Executor {
                 binder.bind(copy, snapshot);
                 executeCopy(copy, snapshot, started);
             });
-            case SelectStatement select -> runPinned(select.tableName(), snapshot -> {
+            case SelectStatement select -> runPinned(select.tableNames().getFirst(), snapshot -> {
                 binder.bind(select, snapshot);
                 executeSelect(select, snapshot, started);
             });
@@ -315,7 +315,7 @@ public final class Executor {
         Operator plan = planner.plan(statement, snapshot);
         ScanStats stats = planner.lastScanStats();
         long rowsOut = drainToOutput(plan);
-        logSelectSummary(statement.tableName(), rowsOut, stats, started);
+        logSelectSummary(statement.tableNames().getFirst(), rowsOut, stats, started);
     }
 
     /**

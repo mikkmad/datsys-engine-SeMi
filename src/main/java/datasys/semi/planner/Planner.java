@@ -63,42 +63,54 @@ public final class Planner {
     }
 
     /**
-     * Creates an operator execution plan for a {@code SELECT} statement against a
-     * pinned {@link Catalog} snapshot.
+     * Creates an operator execution plan for a {@code SELECT} statement against
+     * a pinned {@link Catalog} snapshot. Only the first {@code FROM} table is
+     * planned; the binder rejects multi-table statements until hash join chains
+     * arrive with Exercise 10 section 4.
      *
      * @param statement the bound select statement to plan
      * @param snapshot  pinned catalog snapshot of the target table
      * @return root operator of the planned pipeline
      * @throws IllegalArgumentException if {@code statement} or {@code snapshot} is
-     *                                  null,
-     *                                  the snapshot does not match the statement's
-     *                                  table,
-     *                                  or the statement references an unknown
-     *                                  column
+     *                                  null, the snapshot does not match the
+     *                                  statement's first table, or a column is
+     *                                  unknown
      */
     public Operator plan(SelectStatement statement, Catalog snapshot) {
         if (statement == null || snapshot == null) {
             throw new IllegalArgumentException("statement and snapshot must not be null");
         }
-        if (!snapshot.table().equals(statement.tableName())) {
-            throw new IllegalArgumentException("unknown table: " + statement.tableName());
+        if (!snapshot.table().equals(statement.tableNames().getFirst())) {
+            throw new IllegalArgumentException("unknown table: " + statement.tableNames().getFirst());
         }
 
         List<ColumnSpec> schema = snapshot.columnSpecs();
-        Operator root = statement.where().isEmpty()
+        Operator root = statement.filters().isEmpty()
                 ? planWithoutPredicate(snapshot)
-                : planWithPredicate(snapshot, schema, statement.where().get());
+                : planWithPredicates(snapshot, schema, statement.filters());
 
         if (statement.columns().isPresent()) {
-            List<String> projectedColumnNames = statement.columns().get();
-            int[] columnIndices = new int[projectedColumnNames.size()];
-            for (int index = 0; index < projectedColumnNames.size(); index++) {
-                columnIndices[index] = resolveColumnIndex(schema, projectedColumnNames.get(index));
-            }
-            root = new ProjectOperator(root, columnIndices);
+            root = planProjection(root, schema, statement.columns().get());
         }
-
         return root;
+    }
+
+    /**
+     * Wraps a pipeline in a projection onto the named columns.
+     *
+     * @param child                pipeline producing full schema rows
+     * @param schema               table schema
+     * @param projectedColumnNames columns to keep, in output order
+     * @return project operator over {@code child}
+     * @throws IllegalArgumentException if a projected column is unknown
+     */
+    private static Operator planProjection(Operator child, List<ColumnSpec> schema,
+            List<String> projectedColumnNames) {
+        int[] columnIndices = new int[projectedColumnNames.size()];
+        for (int index = 0; index < projectedColumnNames.size(); index++) {
+            columnIndices[index] = resolveColumnIndex(schema, projectedColumnNames.get(index));
+        }
+        return new ProjectOperator(child, columnIndices);
     }
 
     /**
@@ -187,26 +199,46 @@ public final class Planner {
 
     /**
      * Builds a filter-over-scan plan evaluating partition summaries for pruning.
+     * A partition is read only if every filter may match it; one
+     * {@link FilterOperator} per filter is stacked above the scan, in WHERE
+     * order.
      *
-     * @param snapshot  pinned catalog snapshot of the table being scanned
-     * @param schema    table schema from the snapshot
-     * @param predicate filter predicate to evaluate
-     * @return filter operator wrapping scan operator
+     * @param snapshot pinned catalog snapshot of the table being scanned
+     * @param schema   table schema from the snapshot
+     * @param filters  non-empty list of filter predicates on this table
+     * @return filter operators wrapping a scan operator
+     * @throws IllegalArgumentException if a filter column is unknown
      */
-    private Operator planWithPredicate(Catalog snapshot, List<ColumnSpec> schema, Predicate predicate) {
-        int columnIndex = resolveColumnIndex(schema, predicate.columnName());
-
-        List<Integer> survivingPartitions = partitionsThatMayMatch(snapshot, predicate);
+    private Operator planWithPredicates(Catalog snapshot, List<ColumnSpec> schema, List<Predicate> filters) {
+        List<Integer> survivingPartitions = intersectSurvivingPartitions(snapshot, filters);
         int totalPartitions = snapshot.partitions().size();
         int readCount = survivingPartitions.size();
-        int prunedCount = totalPartitions - readCount;
+        lastScanStats = new ScanStats(totalPartitions, readCount, totalPartitions - readCount, snapshot.version());
 
-        lastScanStats = new ScanStats(totalPartitions, readCount, prunedCount, snapshot.version());
+        Operator root = new ScanOperator(engine, snapshot, survivingPartitions);
+        for (Predicate filter : filters) {
+            BoundPredicate boundPredicate = new BoundPredicate(
+                    resolveColumnIndex(schema, filter.columnName()), filter.comparison(), filter.constant());
+            root = new FilterOperator(root, boundPredicate);
+        }
+        return root;
+    }
 
-        BoundPredicate boundPredicate = new BoundPredicate(
-                columnIndex, predicate.comparison(), predicate.constant());
-        ScanOperator scanOperator = new ScanOperator(engine, snapshot, survivingPartitions);
-        return new FilterOperator(scanOperator, boundPredicate);
+    /**
+     * Intersects the pruning results of all filters: a partition survives only
+     * if no filter can rule it out.
+     *
+     * @param snapshot pinned catalog snapshot of the table
+     * @param filters  non-empty list of filter predicates on this table
+     * @return surviving partition numbers in ascending order
+     * @throws IllegalArgumentException if a filter column is unknown
+     */
+    private List<Integer> intersectSurvivingPartitions(Catalog snapshot, List<Predicate> filters) {
+        List<Integer> survivingPartitions = new ArrayList<>(partitionsThatMayMatch(snapshot, filters.getFirst()));
+        for (Predicate filter : filters.subList(1, filters.size())) {
+            survivingPartitions.retainAll(partitionsThatMayMatch(snapshot, filter));
+        }
+        return survivingPartitions;
     }
 
     /**
