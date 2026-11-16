@@ -451,12 +451,30 @@ class ExecutorTest {
 
         IllegalArgumentException bindFailure = assertThrows(IllegalArgumentException.class,
                 () -> executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name AND c_city = 1;"));
-        assertTrue(bindFailure.getMessage().contains("constant type does not match"), bindFailure.getMessage());
+        assertEquals("constant type does not match column type: c_city (customers) is STRING but the constant is LONG",
+                bindFailure.getMessage());
 
         assertThrows(IllegalArgumentException.class,
                 () -> executor.execute("SELECT * FROM orders, missing WHERE o_custname = m_name;"));
 
         assertEquals(0, engine.pinnedReaderCount("orders", engine.snapshot("orders").version()));
         assertEquals(0, engine.pinnedReaderCount("customers", engine.snapshot("customers").version()));
+    }
+
+    /**
+     * Issue #84: a FROM list naming the same table twice pins that table twice
+     * before binding rejects it; both pins must be released.
+     */
+    @Test
+    void duplicateFromTableIsRejectedAndReleasesBothPins() {
+        Executor executor = new Executor(engine, new PrintStream(new ByteArrayOutputStream(), true,
+                StandardCharsets.UTF_8));
+        executor.execute("CREATE TABLE orders (o_orderkey LONG, o_custname STRING);");
+
+        IllegalArgumentException duplicate = assertThrows(IllegalArgumentException.class,
+                () -> executor.execute("SELECT * FROM orders, orders;"));
+        assertEquals("duplicate table in FROM list: orders", duplicate.getMessage());
+
+        assertEquals(0, engine.pinnedReaderCount("orders", engine.snapshot("orders").version()));
     }
 }

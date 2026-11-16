@@ -53,3 +53,10 @@ Package placement: the resolver lives in `datasys.semi.schema`, which depends on
 
 - §4: replace the executor guard in `bindAndPlanSelect` with planning over all snapshots. Use `ColumnResolver` to assign each filter to its table (`tablePosition`, `columnIndexInTable`) and to compute join keys (`joinedIndex` for the build side, `columnIndexInTable` for the probing table).
 - The binder accepts a multi-table `FROM` list without a connecting join (a cross product). Per spec §4 the planner rejects it, with a message suggesting a different `FROM` order.
+
+## 6. Review Follow-ups (PR #82)
+
+- **Issue #83:** filter type mismatches now name the column and its table, in both the multi-table `SELECT` path and the single-table `DELETE` path. Example: `constant type does not match column type: c_city (customers) is STRING but the constant is LONG`. Covered by `MultiTableBinderTest` (`SELECT` and `DELETE`) and `ExecutorTest`.
+- **Issue #84:** `ExecutorTest.duplicateFromTableIsRejectedAndReleasesBothPins` runs `SELECT * FROM orders, orders;` through the executor. It asserts the duplicate-table message and that `orders` has 0 pinned readers afterwards, even though `runPinnedAll` pins it twice.
+- **Review comment:** `Executor.execute(String)`, `execute(List)` and `executeQuery` now document `@throws UnsupportedOperationException` for the temporary multi-table guard.
+- `mvn -B verify`: 125 unit and 201 integration tests, 0 failures.

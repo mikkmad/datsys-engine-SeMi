@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import datasys.semi.engine.StorageEngine;
+import datasys.semi.models.DeleteStatement;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.parser.Binder;
 import datasys.semi.parser.SqlParser;
@@ -152,7 +153,23 @@ class MultiTableBinderTest {
                 "SELECT * FROM orders, cities, customers "
                         + "WHERE o_custname = c_name AND c_city = ct_city AND ct_population > 500000;")));
         assertBindFails("SELECT * FROM orders, customers WHERE o_custname = c_name AND c_city = 5;",
-                "constant type does not match column type: STRING");
+                "constant type does not match column type: c_city (customers) is STRING but the constant is LONG");
+        assertBindFails("SELECT * FROM orders, products WHERE o_prodname = p_name AND p_price > 100;",
+                "constant type does not match column type: p_price (products) is DOUBLE but the constant is LONG");
+    }
+
+    /**
+     * Verifies that a single-table DELETE filter with a wrongly typed constant
+     * also names the column and its table.
+     */
+    @Test
+    void deleteFilterTypeMismatchNamesColumnAndTable() {
+        DeleteStatement delete = (DeleteStatement) parser.parse("DELETE FROM orders WHERE o_quantity = 'x';")
+                .getFirst();
+
+        IllegalArgumentException mismatch = assertThrows(IllegalArgumentException.class, () -> binder.bind(delete));
+        assertEquals("constant type does not match column type: o_quantity (orders) is LONG but the constant is STRING",
+                mismatch.getMessage());
     }
 
     /**

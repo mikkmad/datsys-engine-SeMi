@@ -121,7 +121,8 @@ public final class Binder {
 
         statement.columns().ifPresent(columns -> columns.forEach(resolver::resolve));
         for (Predicate filter : statement.filters()) {
-            validatePredicateType(resolver.resolve(filter.columnName()).type(), filter.constant());
+            ResolvedColumn column = resolver.resolve(filter.columnName());
+            validatePredicateType(column.column().name(), column.tableName(), column.type(), filter.constant());
         }
         for (JoinPredicate join : statement.joins()) {
             bindJoin(join, resolver);
@@ -252,7 +253,7 @@ public final class Binder {
      */
     private void bindFilter(Predicate filter, Catalog snapshot) {
         ColumnSpec matchedColumn = findColumn(filter.columnName(), snapshot);
-        validatePredicateType(matchedColumn.type(), filter.constant());
+        validatePredicateType(matchedColumn.name(), snapshot.table(), matchedColumn.type(), filter.constant());
     }
 
     /**
@@ -286,14 +287,18 @@ public final class Binder {
 
     /**
      * Validates that the predicate constant value matches the expected Java type
-     * for the column.
+     * for the column. The error names the column and its owning table, so it
+     * stays unambiguous in multi-table queries.
      *
+     * @param columnName name of the filtered column
+     * @param tableName  table that owns the column
      * @param columnType expected column type
      * @param constant   constant value to validate
      * @throws IllegalArgumentException if constant type does not match the column
      *                                  type
      */
-    private void validatePredicateType(ColumnType columnType, Object constant) {
+    private void validatePredicateType(String columnName, String tableName, ColumnType columnType,
+            Object constant) {
         boolean valid = switch (columnType) {
             case STRING -> constant instanceof String;
             case LONG -> constant instanceof Long;
@@ -301,7 +306,24 @@ public final class Binder {
         };
 
         if (!valid) {
-            throw new IllegalArgumentException("constant type does not match column type: " + columnType);
+            throw new IllegalArgumentException("constant type does not match column type: " + columnName
+                    + " (" + tableName + ") is " + columnType + " but the constant is " + describeType(constant));
         }
+    }
+
+    /**
+     * Names the SQL type of a parsed literal constant.
+     *
+     * @param constant literal constant produced by the parser
+     * @return {@code STRING}, {@code LONG}, {@code DOUBLE}, or the Java class name
+     *         for any other value
+     */
+    private static String describeType(Object constant) {
+        return switch (constant) {
+            case String _ -> ColumnType.STRING.name();
+            case Long _ -> ColumnType.LONG.name();
+            case Double _ -> ColumnType.DOUBLE.name();
+            default -> constant.getClass().getSimpleName();
+        };
     }
 }

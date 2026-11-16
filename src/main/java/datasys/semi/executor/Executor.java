@@ -90,7 +90,10 @@ public final class Executor {
      * Parses and executes a multi-statement SQL script.
      *
      * @param sql script containing one or more semicolon-separated statements
-     * @throws IllegalArgumentException if {@code sql} is null or execution fails
+     * @throws IllegalArgumentException      if {@code sql} is null or execution
+     *                                       fails
+     * @throws UnsupportedOperationException if a SELECT lists more than one
+     *                                       table (until hash joins are planned)
      */
     public void execute(String sql) {
         if (sql == null) {
@@ -108,8 +111,10 @@ public final class Executor {
      * Executes a list of parsed statements, tracking statement numbers in the MDC.
      *
      * @param statements statements to bind and execute
-     * @throws IllegalArgumentException if {@code statements} is null or execution
-     *                                  fails
+     * @throws IllegalArgumentException      if {@code statements} is null or
+     *                                       execution fails
+     * @throws UnsupportedOperationException if a SELECT lists more than one
+     *                                       table (until hash joins are planned)
      */
     public void execute(List<Statement> statements) {
         if (statements == null) {
@@ -140,8 +145,11 @@ public final class Executor {
      *
      * @param sql SQL query string containing a single SELECT statement
      * @return list of rows produced by the query
-     * @throws IllegalArgumentException if SQL does not yield exactly one SELECT
-     *                                  statement
+     * @throws IllegalArgumentException      if SQL does not yield exactly one
+     *                                       SELECT statement, or binding or
+     *                                       planning fails
+     * @throws UnsupportedOperationException if the SELECT lists more than one
+     *                                       table (until hash joins are planned)
      */
     public List<Object[]> executeQuery(String sql) {
         MDC.put("statementNumber", "1");
