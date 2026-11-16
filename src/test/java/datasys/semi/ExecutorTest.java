@@ -430,13 +430,13 @@ class ExecutorTest {
     }
 
     /**
-     * Exercise 10.2: a multi-table SELECT pins one snapshot per FROM table and
-     * binds across all of them; until hash joins are planned it then fails
-     * explicitly instead of scanning only the first table. A bind failure on the
-     * second table's columns and the unsupported failure both release every pin.
+     * Exercise 10.2/10.4: a multi-table SELECT pins one snapshot per FROM table,
+     * binds across all of them and executes. A successful join, a bind failure on
+     * the second table's columns and an unknown second table all release every
+     * pin.
      */
     @Test
-    void multiTableSelectBindsAcrossTablesAndReleasesAllPins() {
+    void multiTableSelectExecutesAndReleasesAllPins() {
         Executor executor = new Executor(engine, new PrintStream(new ByteArrayOutputStream(), true,
                 StandardCharsets.UTF_8));
         executor.execute("""
@@ -444,10 +444,7 @@ class ExecutorTest {
                 CREATE TABLE customers (c_name STRING, c_city STRING);
                 """);
 
-        UnsupportedOperationException unsupported = assertThrows(UnsupportedOperationException.class,
-                () -> executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name;"));
-        assertEquals("multi-table SELECT execution is not supported yet: orders, customers",
-                unsupported.getMessage());
+        executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name;");
 
         IllegalArgumentException bindFailure = assertThrows(IllegalArgumentException.class,
                 () -> executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name AND c_city = 1;"));

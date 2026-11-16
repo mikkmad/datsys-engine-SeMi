@@ -172,7 +172,7 @@ class PlannerTest {
         assertThrows(IllegalArgumentException.class, () -> planner.plan(null, snapshot));
         assertThrows(IllegalArgumentException.class,
                 () -> planner.plan(new SelectStatement(List.of("trips"), Optional.empty(),
-                        List.of(), List.of()), null));
+                        List.of(), List.of()), (Catalog) null));
 
         SelectStatement unknownTable = new SelectStatement(List.of("nonexistent"), Optional.empty(),
                 List.of(), List.of());
