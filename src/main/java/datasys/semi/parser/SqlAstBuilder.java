@@ -128,14 +128,18 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
     }
 
     /**
-     * Visits a SELECT parse tree node.
+     * Visits a SELECT parse tree node. Each WHERE predicate is sorted by shape:
+     * column-to-constant predicates land in {@code filters}, column-to-column
+     * predicates in {@code joins}; source order is kept within each list.
      *
      * @param context the select context
      * @return SelectStatement AST record
      */
     @Override
     public SelectStatement visitSelect(SqlParser.SelectContext context) {
-        String tableName = context.IDENTIFIER().getText();
+        List<String> tableNames = context.IDENTIFIER().stream()
+                .map(node -> node.getText())
+                .toList();
 
         Optional<List<String>> columns = Optional.empty();
         if (context.columnList() != null) {
@@ -144,14 +148,37 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
                     .toList());
         }
 
-        Optional<Predicate> where = context.predicate() != null
-                ? Optional.of((Predicate) visit(context.predicate()))
-                : Optional.empty();
-        return new SelectStatement(tableName, columns, where);
+        List<Predicate> filters = new ArrayList<>();
+        List<JoinPredicate> joins = new ArrayList<>();
+        if (context.condition() != null) {
+            sortPredicates(context.condition(), filters, joins);
+        }
+        return new SelectStatement(tableNames, columns, filters, joins);
     }
 
     /**
-     * Visits a DELETE parse tree node.
+     * Sorts the predicates of an {@code AND} chain into filters and joins.
+     *
+     * @param context the condition context
+     * @param filters receives column-to-constant predicates in source order
+     * @param joins   receives column-to-column predicates in source order
+     * @throws IllegalStateException if a predicate has neither shape
+     */
+    private void sortPredicates(SqlParser.ConditionContext context, List<Predicate> filters,
+            List<JoinPredicate> joins) {
+        for (SqlParser.PredicateContext predicateContext : context.predicate()) {
+            if (predicateContext.filter() != null) {
+                filters.add(visitFilter(predicateContext.filter()));
+            } else if (predicateContext.join() != null) {
+                joins.add(visitJoin(predicateContext.join()));
+            } else {
+                throw new IllegalStateException("unsupported predicate context: " + predicateContext.getText());
+            }
+        }
+    }
+
+    /**
+     * Visits a DELETE parse tree node. DELETE keeps the single-filter form.
      *
      * @param context the delete context
      * @return DeleteStatement AST record
@@ -159,20 +186,21 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
     @Override
     public DeleteStatement visitDelete(SqlParser.DeleteContext context) {
         String tableName = context.IDENTIFIER().getText();
-        Optional<Predicate> where = context.predicate() != null
-                ? Optional.of((Predicate) visit(context.predicate()))
+        Optional<Predicate> where = context.filter() != null
+                ? Optional.of(visitFilter(context.filter()))
                 : Optional.empty();
         return new DeleteStatement(tableName, where);
     }
 
     /**
-     * Visits a predicate parse tree node in a WHERE clause.
+     * Visits a filter parse tree node: a column compared with a constant.
      *
-     * @param context the predicate context
+     * @param context the filter context
      * @return Predicate AST record
+     * @throws IllegalStateException if the comparison token is unexpected
      */
     @Override
-    public Predicate visitPredicate(SqlParser.PredicateContext context) {
+    public Predicate visitFilter(SqlParser.FilterContext context) {
         String columnName = context.IDENTIFIER().getText();
         Comparison comparison = switch (context.comparison.getText()) {
             case "=" -> Comparison.EQUALS;
@@ -182,6 +210,18 @@ public final class SqlAstBuilder extends SqlBaseVisitor<Object> {
         };
         Object constant = visit(context.literal());
         return new Predicate(columnName, comparison, constant);
+    }
+
+    /**
+     * Visits a join parse tree node: a column compared for equality with another
+     * column.
+     *
+     * @param context the join context
+     * @return JoinPredicate AST record
+     */
+    @Override
+    public JoinPredicate visitJoin(SqlParser.JoinContext context) {
+        return new JoinPredicate(context.left.getText(), context.right.getText());
     }
 
     /**

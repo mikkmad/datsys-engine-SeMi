@@ -3,6 +3,7 @@ package datasys.semi.executor;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.slf4j.Logger;
@@ -32,8 +33,8 @@ import datasys.semi.util.LogSanitizer;
  *
  * <p>
  * Maintains statement sequencing in the SLF4J MDC ({@code statementNumber}),
- * pins a {@link Catalog} snapshot at statement start before binding and
- * releases it when the statement ends, dispatches DDL, COPY and DELETE
+ * pins a {@link Catalog} snapshot at statement start before binding (one per
+ * {@code FROM} table for a SELECT) and releases it when the statement ends, dispatches DDL, COPY and DELETE
  * statements to the storage engine, and runs SELECT statements as
  * Volcano operator pipelines. Output from SELECT is emitted as headerless CSV
  * to the configured output stream. Execution halts immediately upon
@@ -141,24 +142,21 @@ public final class Executor {
      * @param sql SQL query string containing a single SELECT statement
      * @return list of rows produced by the query
      * @throws IllegalArgumentException if SQL does not yield exactly one SELECT
-     *                                  statement
+     *                                  statement, or binding or planning fails
      */
     public List<Object[]> executeQuery(String sql) {
         MDC.put("statementNumber", "1");
         try {
             SelectStatement select = parseSingleSelect(sql);
             long started = System.nanoTime();
-            Catalog snapshot = engine.pinSnapshot(select.tableName());
-            try {
-                binder.bind(select, snapshot);
-                Operator plan = planner.plan(select, snapshot);
-                ScanStats stats = planner.lastScanStats();
-                List<Object[]> rows = drainToList(plan);
-                logSelectSummary(select.tableName(), rows.size(), stats, started);
-                return rows;
-            } finally {
-                engine.releaseSnapshot(snapshot);
-            }
+            List<Object[]> rows = new ArrayList<>();
+            runPinnedAll(select.tableNames(), snapshots -> {
+                Operator plan = bindAndPlanSelect(select, snapshots);
+                Map<String, ScanStats> statsByTable = planner.lastScanStatsByTable();
+                rows.addAll(drainToList(plan));
+                logSelectSummaries(rows.size(), statsByTable, started);
+            });
+            return rows;
         } catch (RuntimeException exception) {
             LOGGER.error("statement_failed operation=SELECT reason={}",
                     LogSanitizer.sanitize(exception.getMessage()));
@@ -211,10 +209,8 @@ public final class Executor {
                 binder.bind(copy, snapshot);
                 executeCopy(copy, snapshot, started);
             });
-            case SelectStatement select -> runPinned(select.tableName(), snapshot -> {
-                binder.bind(select, snapshot);
-                executeSelect(select, snapshot, started);
-            });
+            case SelectStatement select -> runPinnedAll(select.tableNames(),
+                    snapshots -> executeSelect(select, snapshots, started));
             case DeleteStatement delete -> runPinned(delete.tableName(), snapshot -> {
                 binder.bind(delete, snapshot);
                 executeDelete(delete, snapshot, started);
@@ -238,6 +234,42 @@ public final class Executor {
         } finally {
             engine.releaseSnapshot(snapshot);
         }
+    }
+
+    /**
+     * Pins the current catalog version of every listed table, in order, runs
+     * {@code action} against the pinned snapshots, and releases every pin when
+     * the action completes or fails. If pinning a later table fails, the pins
+     * already taken are released before the failure propagates.
+     *
+     * @param tableNames tables to pin, in {@code FROM}-list order
+     * @param action     statement body executed against the pinned snapshots
+     * @throws IllegalArgumentException if a table does not exist
+     */
+    private void runPinnedAll(List<String> tableNames, Consumer<List<Catalog>> action) {
+        List<Catalog> snapshots = new ArrayList<>(tableNames.size());
+        try {
+            for (String tableName : tableNames) {
+                snapshots.add(engine.pinSnapshot(tableName));
+            }
+            action.accept(List.copyOf(snapshots));
+        } finally {
+            snapshots.forEach(engine::releaseSnapshot);
+        }
+    }
+
+    /**
+     * Binds a {@code SELECT} against its pinned snapshots and plans it; joins of
+     * several tables are planned left-deep in {@code FROM}-list order.
+     *
+     * @param statement SELECT statement
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order
+     * @return root operator of the planned pipeline
+     * @throws IllegalArgumentException if binding or planning fails
+     */
+    private Operator bindAndPlanSelect(SelectStatement statement, List<Catalog> snapshots) {
+        binder.bind(statement, snapshots);
+        return planner.plan(statement, snapshots);
     }
 
     /**
@@ -308,14 +340,29 @@ public final class Executor {
      * its operator pipeline to output.
      *
      * @param statement SELECT statement
-     * @param snapshot  pinned catalog snapshot at statement start
+     * @param snapshots pinned catalog snapshots at statement start, one per
+     *                  {@code FROM} table
      * @param started   nano timestamp when execution started
      */
-    private void executeSelect(SelectStatement statement, Catalog snapshot, long started) {
-        Operator plan = planner.plan(statement, snapshot);
-        ScanStats stats = planner.lastScanStats();
+    private void executeSelect(SelectStatement statement, List<Catalog> snapshots, long started) {
+        Operator plan = bindAndPlanSelect(statement, snapshots);
+        Map<String, ScanStats> statsByTable = planner.lastScanStatsByTable();
         long rowsOut = drainToOutput(plan);
-        logSelectSummary(statement.tableName(), rowsOut, stats, started);
+        logSelectSummaries(rowsOut, statsByTable, started);
+    }
+
+    /**
+     * Logs one summary line per {@code FROM} table of a completed {@code SELECT}
+     * statement, in {@code FROM}-list order. Each line carries that table's
+     * partition counts and version and the statement's output row count, so the
+     * line format is the same for single-table and multi-table queries.
+     *
+     * @param rowsOut      number of rows emitted by the query
+     * @param statsByTable scan statistics per table, in {@code FROM}-list order
+     * @param started      nano timestamp when execution started
+     */
+    private static void logSelectSummaries(long rowsOut, Map<String, ScanStats> statsByTable, long started) {
+        statsByTable.forEach((tableName, stats) -> logSelectSummary(tableName, rowsOut, stats, started));
     }
 
     /**

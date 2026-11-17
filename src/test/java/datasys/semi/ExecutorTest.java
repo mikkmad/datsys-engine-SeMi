@@ -207,7 +207,7 @@ class ExecutorTest {
         assertEquals(1L, snapshotV1.version());
         Planner planner = new Planner(engine);
         Operator pinnedPlan = planner.plan(
-                new SelectStatement("trips", Optional.empty(), Optional.empty()), snapshotV1);
+                new SelectStatement(List.of("trips"), Optional.empty(), List.of(), List.of()), snapshotV1);
 
         // Commit v2 while pinnedPlan still holds snapshotV1
         executor.execute("COPY trips FROM '%s';".formatted(csvFile.toString()));
@@ -427,5 +427,51 @@ class ExecutorTest {
                 .filter(line -> line.contains("," + session + ",0,"))
                 .anyMatch(line -> line.contains(",ERROR,") && line.contains("failed line=1 col="));
         assertTrue(hasParseFailure, "expected parser ERROR line with statementNumber 0");
+    }
+
+    /**
+     * Exercise 10.2/10.4: a multi-table SELECT pins one snapshot per FROM table,
+     * binds across all of them and executes. A successful join, a bind failure on
+     * the second table's columns and an unknown second table all release every
+     * pin.
+     */
+    @Test
+    void multiTableSelectExecutesAndReleasesAllPins() {
+        Executor executor = new Executor(engine, new PrintStream(new ByteArrayOutputStream(), true,
+                StandardCharsets.UTF_8));
+        executor.execute("""
+                CREATE TABLE orders (o_orderkey LONG, o_custname STRING);
+                CREATE TABLE customers (c_name STRING, c_city STRING);
+                """);
+
+        executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name;");
+
+        IllegalArgumentException bindFailure = assertThrows(IllegalArgumentException.class,
+                () -> executor.execute("SELECT * FROM orders, customers WHERE o_custname = c_name AND c_city = 1;"));
+        assertEquals("constant type does not match column type: c_city (customers) is STRING but the constant is LONG",
+                bindFailure.getMessage());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> executor.execute("SELECT * FROM orders, missing WHERE o_custname = m_name;"));
+
+        assertEquals(0, engine.pinnedReaderCount("orders", engine.snapshot("orders").version()));
+        assertEquals(0, engine.pinnedReaderCount("customers", engine.snapshot("customers").version()));
+    }
+
+    /**
+     * Issue #84: a FROM list naming the same table twice pins that table twice
+     * before binding rejects it; both pins must be released.
+     */
+    @Test
+    void duplicateFromTableIsRejectedAndReleasesBothPins() {
+        Executor executor = new Executor(engine, new PrintStream(new ByteArrayOutputStream(), true,
+                StandardCharsets.UTF_8));
+        executor.execute("CREATE TABLE orders (o_orderkey LONG, o_custname STRING);");
+
+        IllegalArgumentException duplicate = assertThrows(IllegalArgumentException.class,
+                () -> executor.execute("SELECT * FROM orders, orders;"));
+        assertEquals("duplicate table in FROM list: orders", duplicate.getMessage());
+
+        assertEquals(0, engine.pinnedReaderCount("orders", engine.snapshot("orders").version()));
     }
 }

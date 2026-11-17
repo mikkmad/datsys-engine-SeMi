@@ -46,16 +46,15 @@ class SqlParserTest {
                 // 1.3 SELECT with WHERE
                 List<Statement> selectWithWhereResults = parser.parse("SELECT * FROM trips WHERE distance > 100;");
                 assertEquals(1, selectWithWhereResults.size());
-                SelectStatement expectedSelectWithWhere = new SelectStatement(
-                                "trips", Optional.empty(),
-                                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)));
+                SelectStatement expectedSelectWithWhere = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)), List.of());
                 assertEquals(expectedSelectWithWhere, selectWithWhereResults.getFirst());
 
                 // 1.4 SELECT without WHERE
                 List<Statement> selectNoWhereResults = parser.parse("SELECT * FROM trips;");
                 assertEquals(1, selectNoWhereResults.size());
-                SelectStatement expectedSelectNoWhere = new SelectStatement("trips", Optional.empty(),
-                                Optional.empty());
+                SelectStatement expectedSelectNoWhere = new SelectStatement(List.of("trips"), Optional.empty(),
+                        List.of(), List.of());
                 assertEquals(expectedSelectNoWhere, selectNoWhereResults.getFirst());
 
                 // 1.5 DELETE with WHERE
@@ -94,35 +93,35 @@ class SqlParserTest {
                 // Positive Long: 12
                 SelectStatement selectLong = (SelectStatement) parser.parse("SELECT * FROM trips WHERE distance = 12;")
                                 .getFirst();
-                Object longVal = selectLong.where().orElseThrow().constant();
+                Object longVal = selectLong.filters().getFirst().constant();
                 assertInstanceOf(Long.class, longVal);
                 assertEquals(12L, longVal);
 
                 // Positive Double: 12.0
                 SelectStatement selectDouble = (SelectStatement) parser.parse("SELECT * FROM trips WHERE price = 12.0;")
                                 .getFirst();
-                Object doubleVal = selectDouble.where().orElseThrow().constant();
+                Object doubleVal = selectDouble.filters().getFirst().constant();
                 assertInstanceOf(Double.class, doubleVal);
                 assertEquals(12.0, doubleVal);
 
                 // String: '12'
                 SelectStatement selectString = (SelectStatement) parser.parse("SELECT * FROM trips WHERE city = '12';")
                                 .getFirst();
-                Object stringVal = selectString.where().orElseThrow().constant();
+                Object stringVal = selectString.filters().getFirst().constant();
                 assertInstanceOf(String.class, stringVal);
                 assertEquals("12", stringVal);
 
                 // Negative Long: -1
                 SelectStatement selectNegLong = (SelectStatement) parser
                                 .parse("SELECT * FROM trips WHERE distance = -1;").getFirst();
-                Object negLongVal = selectNegLong.where().orElseThrow().constant();
+                Object negLongVal = selectNegLong.filters().getFirst().constant();
                 assertInstanceOf(Long.class, negLongVal);
                 assertEquals(-1L, negLongVal);
 
                 // Negative Double: -1.5
                 SelectStatement selectNegDouble = (SelectStatement) parser
                                 .parse("SELECT * FROM trips WHERE price = -1.5;").getFirst();
-                Object negDoubleVal = selectNegDouble.where().orElseThrow().constant();
+                Object negDoubleVal = selectNegDouble.filters().getFirst().constant();
                 assertInstanceOf(Double.class, negDoubleVal);
                 assertEquals(-1.5, negDoubleVal);
         }
@@ -133,7 +132,7 @@ class SqlParserTest {
                 List<Statement> lowerStatements = parser.parse("select * from TriPs;");
                 assertEquals(1, lowerStatements.size());
                 SelectStatement lowerSelect = (SelectStatement) lowerStatements.getFirst();
-                assertEquals("TriPs", lowerSelect.tableName());
+                assertEquals("TriPs", lowerSelect.tableNames().getFirst());
 
                 List<Statement> mixedStatements = parser
                                 .parse("cReAtE tAbLe MyTable (CityName sTrInG, MaxDist lOnG, AvgCost dOuBlE);");
@@ -353,6 +352,6 @@ class SqlParserTest {
         private Object parseConstant(String predicateSql) {
                 SelectStatement select = (SelectStatement) parser
                                 .parse("SELECT * FROM trips WHERE " + predicateSql + ";").getFirst();
-                return select.where().orElseThrow().constant();
+                return select.filters().getFirst().constant();
         }
 }

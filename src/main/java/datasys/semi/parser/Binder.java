@@ -1,5 +1,6 @@
 package datasys.semi.parser;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -10,15 +11,25 @@ import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.models.CopyStatement;
 import datasys.semi.models.CreateTableStatement;
 import datasys.semi.models.DeleteStatement;
+import datasys.semi.models.JoinPredicate;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.models.Statement;
+import datasys.semi.schema.ColumnResolver;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
+import datasys.semi.schema.ResolvedColumn;
+import datasys.semi.schema.TableSchema;
 
 /**
- * Validates AST statements against a pinned {@link Catalog} snapshot or
+ * Validates AST statements against pinned {@link Catalog} snapshots or
  * table-creation schema rules.
+ *
+ * <p>
+ * Multi-table {@code SELECT}s are bound against one snapshot per {@code FROM}
+ * table; unqualified column names are resolved through a
+ * {@link ColumnResolver}. Stateless apart from its engine reference; throw
+ * sites do not log (failures are logged by the executor boundary).
  */
 public final class Binder {
 
@@ -55,7 +66,7 @@ public final class Binder {
         switch (statement) {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bind(copy, engine.snapshot(copy.tableName()));
-            case SelectStatement select -> bind(select, engine.snapshot(select.tableName()));
+            case SelectStatement select -> bind(select, select.tableNames().stream().map(engine::snapshot).toList());
             case DeleteStatement delete -> bind(delete, engine.snapshot(delete.tableName()));
         }
     }
@@ -65,7 +76,9 @@ public final class Binder {
      * re-reading metadata from {@link StorageEngine}.
      *
      * @param statement the AST statement to validate
-     * @param snapshot  pinned catalog snapshot for the statement's target table
+     * @param snapshot  pinned catalog snapshot for the statement's target table;
+     *                  a SELECT bound this way must list exactly that one table
+     *                  (use {@link #bind(SelectStatement, List)} for joins)
      * @throws IllegalArgumentException if validation fails or arguments are null
      */
     public void bind(Statement statement, Catalog snapshot) {
@@ -76,8 +89,43 @@ public final class Binder {
         switch (statement) {
             case CreateTableStatement createTable -> bindCreateTable(createTable);
             case CopyStatement copy -> bindCopy(copy, snapshot);
-            case SelectStatement select -> bindSelect(select, snapshot);
+            case SelectStatement select -> bind(select, Collections.singletonList(snapshot));
             case DeleteStatement delete -> bindDelete(delete, snapshot);
+        }
+    }
+
+    /**
+     * Validates a {@code SELECT} statement against one pinned snapshot per
+     * {@code FROM} table. Every column name is resolved against the schemas of
+     * all listed tables: it must occur in exactly one of them. Filters must carry
+     * a constant of their column's type; join predicates must connect two
+     * different tables through columns of the same type.
+     *
+     * @param statement the select statement
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order, one
+     *                  per table
+     * @throws IllegalArgumentException if an argument is null, the snapshots do
+     *                                  not match the {@code FROM} list, a table
+     *                                  repeats, a column is unknown or ambiguous,
+     *                                  a filter constant has the wrong type, or a
+     *                                  join is within one table or across types
+     */
+    public void bind(SelectStatement statement, List<Catalog> snapshots) {
+        if (statement == null || snapshots == null) {
+            throw new IllegalArgumentException("statement and snapshots must not be null");
+        }
+        requireMatchingSnapshots(statement.tableNames(), snapshots);
+        ColumnResolver resolver = new ColumnResolver(snapshots.stream()
+                .map(snapshot -> new TableSchema(snapshot.table(), snapshot.columnSpecs()))
+                .toList());
+
+        statement.columns().ifPresent(columns -> columns.forEach(resolver::resolve));
+        for (Predicate filter : statement.filters()) {
+            ResolvedColumn column = resolver.resolve(filter.columnName());
+            validatePredicateType(column.column().name(), column.tableName(), column.type(), filter.constant());
+        }
+        for (JoinPredicate join : statement.joins()) {
+            bindJoin(join, resolver);
         }
     }
 
@@ -118,16 +166,48 @@ public final class Binder {
     }
 
     /**
-     * Validates that the target table and optional predicate in a {@code SELECT}
-     * statement exist in the pinned snapshot and match types.
+     * Verifies that the snapshots are exactly the {@code FROM}-list tables, in
+     * order.
      *
-     * @param statement the select statement
-     * @param snapshot  pinned catalog snapshot of the target table
-     * @throws IllegalArgumentException if the snapshot is null, a column is
-     *                                  unknown, or the predicate type mismatches
+     * @param tableNames tables in {@code FROM}-list order
+     * @param snapshots  pinned catalog snapshots
+     * @throws IllegalArgumentException if the counts differ or a snapshot is
+     *                                  missing or for a different table
      */
-    private void bindSelect(SelectStatement statement, Catalog snapshot) {
-        bindTableAndWhere(statement.tableName(), statement.where(), snapshot);
+    private static void requireMatchingSnapshots(List<String> tableNames, List<Catalog> snapshots) {
+        if (snapshots.size() != tableNames.size()) {
+            throw new IllegalArgumentException("SELECT over " + String.join(", ", tableNames)
+                    + " needs one pinned snapshot per FROM table but got " + snapshots.size());
+        }
+        for (int position = 0; position < tableNames.size(); position++) {
+            requireMatchingSnapshot(tableNames.get(position), snapshots.get(position));
+        }
+    }
+
+    /**
+     * Validates a join predicate: both sides resolve to existing, unambiguous
+     * columns of two different tables with the same type. Keys of different
+     * types would never be {@code equals} in the hash join, so such a join would
+     * silently return no rows; DuckDB would coerce, this engine rejects.
+     *
+     * @param join     the join predicate
+     * @param resolver column resolver over the {@code FROM}-list schemas
+     * @throws IllegalArgumentException if a column is unknown or ambiguous, both
+     *                                  sides belong to the same table, or their
+     *                                  types differ
+     */
+    private static void bindJoin(JoinPredicate join, ColumnResolver resolver) {
+        ResolvedColumn left = resolver.resolve(join.leftColumn());
+        ResolvedColumn right = resolver.resolve(join.rightColumn());
+        String joinText = join.leftColumn() + " = " + join.rightColumn();
+        if (left.tablePosition() == right.tablePosition()) {
+            throw new IllegalArgumentException("join predicate " + joinText
+                    + " must connect two different tables but both columns belong to " + left.tableName());
+        }
+        if (left.type() != right.type()) {
+            throw new IllegalArgumentException("join predicate " + joinText + " compares "
+                    + left.type() + " with " + right.type() + "; join columns must have the same type");
+        }
     }
 
     /**
@@ -159,13 +239,36 @@ public final class Binder {
             return;
         }
 
-        Predicate predicate = where.get();
-        ColumnSpec matchedColumn = snapshot.columnSpecs().stream()
-                .filter(column -> column.name().equals(predicate.columnName()))
-                .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("unknown column: " + predicate.columnName()));
+        bindFilter(where.get(), snapshot);
+    }
 
-        validatePredicateType(matchedColumn.type(), predicate.constant());
+    /**
+     * Validates that a filter references an existing column and carries a
+     * constant of that column's type.
+     *
+     * @param filter   the column-to-constant predicate
+     * @param snapshot pinned catalog snapshot of the filtered table
+     * @throws IllegalArgumentException if the column is unknown or the constant
+     *                                  type does not match the column type
+     */
+    private void bindFilter(Predicate filter, Catalog snapshot) {
+        ColumnSpec matchedColumn = findColumn(filter.columnName(), snapshot);
+        validatePredicateType(matchedColumn.name(), snapshot.table(), matchedColumn.type(), filter.constant());
+    }
+
+    /**
+     * Looks up a column by name in the snapshot's schema.
+     *
+     * @param columnName column name to resolve
+     * @param snapshot   pinned catalog snapshot
+     * @return the matching column specification
+     * @throws IllegalArgumentException if no column has that name
+     */
+    private static ColumnSpec findColumn(String columnName, Catalog snapshot) {
+        return snapshot.columnSpecs().stream()
+                .filter(column -> column.name().equals(columnName))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("unknown column: " + columnName));
     }
 
     /**
@@ -184,14 +287,18 @@ public final class Binder {
 
     /**
      * Validates that the predicate constant value matches the expected Java type
-     * for the column.
+     * for the column. The error names the column and its owning table, so it
+     * stays unambiguous in multi-table queries.
      *
+     * @param columnName name of the filtered column
+     * @param tableName  table that owns the column
      * @param columnType expected column type
      * @param constant   constant value to validate
      * @throws IllegalArgumentException if constant type does not match the column
      *                                  type
      */
-    private void validatePredicateType(ColumnType columnType, Object constant) {
+    private void validatePredicateType(String columnName, String tableName, ColumnType columnType,
+            Object constant) {
         boolean valid = switch (columnType) {
             case STRING -> constant instanceof String;
             case LONG -> constant instanceof Long;
@@ -199,7 +306,24 @@ public final class Binder {
         };
 
         if (!valid) {
-            throw new IllegalArgumentException("constant type does not match column type: " + columnType);
+            throw new IllegalArgumentException("constant type does not match column type: " + columnName
+                    + " (" + tableName + ") is " + columnType + " but the constant is " + describeType(constant));
         }
+    }
+
+    /**
+     * Names the SQL type of a parsed literal constant.
+     *
+     * @param constant literal constant produced by the parser
+     * @return {@code STRING}, {@code LONG}, {@code DOUBLE}, or the Java class name
+     *         for any other value
+     */
+    private static String describeType(Object constant) {
+        return switch (constant) {
+            case String _ -> ColumnType.STRING.name();
+            case Long _ -> ColumnType.LONG.name();
+            case Double _ -> ColumnType.DOUBLE.name();
+            default -> constant.getClass().getSimpleName();
+        };
     }
 }
