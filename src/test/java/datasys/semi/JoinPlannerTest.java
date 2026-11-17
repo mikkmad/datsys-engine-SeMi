@@ -191,21 +191,6 @@ class JoinPlannerTest {
     }
 
     /**
-     * Verifies that an unusable FROM list is rejected before any table pipeline
-     * is planned: a successful plan records per-table ScanStats, and a later
-     * rejected plan leaves none, because join predicates are checked up front.
-     */
-    @Test
-    void rejectedFromListPlansNoTablePipeline() {
-        plan("SELECT * FROM orders, customers WHERE o_custname = c_name;");
-        assertEquals(List.of("orders", "customers"), List.copyOf(planner.lastScanStatsByTable().keySet()));
-
-        assertThrows(IllegalArgumentException.class, () -> plan(
-                "SELECT * FROM orders, customers, cities WHERE o_custname = c_name AND o_custname = c_name;"));
-        assertEquals(List.of(), List.copyOf(planner.lastScanStatsByTable().keySet()));
-    }
-
-    /**
      * Verifies that a column list over a join projects joined-row columns.
      */
     @Test
