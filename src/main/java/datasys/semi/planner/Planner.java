@@ -127,10 +127,14 @@ public final class Planner {
         lastScanStatsByTable = new LinkedHashMap<>();
         List<List<Predicate>> filtersByTable = assignFiltersToTables(statement.filters(), resolver,
                 snapshots.size());
+        List<List<JoinPredicate>> joinsByTable = assignJoinsToTables(statement.joins(), resolver,
+                snapshots.size());
+        requireOneConnectingJoinPerTable(joinsByTable, statement.tableNames());
+
         Operator root = planTablePipeline(snapshots.getFirst(), filtersByTable.getFirst());
         for (int tablePosition = 1; tablePosition < snapshots.size(); tablePosition++) {
             Operator probe = planTablePipeline(snapshots.get(tablePosition), filtersByTable.get(tablePosition));
-            root = planJoin(root, probe, tablePosition, statement, resolver);
+            root = planJoin(root, probe, tablePosition, joinsByTable.get(tablePosition).getFirst(), resolver);
         }
 
         if (statement.columns().isPresent()) {
@@ -199,6 +203,68 @@ public final class Planner {
     }
 
     /**
+     * Groups the join predicates by the table they connect to the tables listed
+     * before it. A predicate connects table {@code i} exactly when the later of
+     * its two tables is {@code i}, so every predicate lands in exactly one fold
+     * step. Grouping once, up front, mirrors {@link #assignFiltersToTables} and
+     * lets the planner reject an unusable {@code FROM} list before it plans any
+     * table pipeline.
+     *
+     * @param joins      join predicates in source order
+     * @param resolver   column resolver over the {@code FROM}-list schemas
+     * @param tableCount number of {@code FROM} tables
+     * @return one list of connecting join predicates per table, in
+     *         {@code FROM}-list order; the entry for the first table is empty
+     *         for bound statements
+     * @throws IllegalArgumentException if a join column is unknown or ambiguous
+     */
+    private static List<List<JoinPredicate>> assignJoinsToTables(List<JoinPredicate> joins,
+            ColumnResolver resolver, int tableCount) {
+        List<List<JoinPredicate>> joinsByTable = new ArrayList<>();
+        for (int tablePosition = 0; tablePosition < tableCount; tablePosition++) {
+            joinsByTable.add(new ArrayList<>());
+        }
+        for (JoinPredicate join : joins) {
+            joinsByTable.get(laterTablePosition(join, resolver)).add(join);
+        }
+        return joinsByTable;
+    }
+
+    /**
+     * Verifies that every table after the first is connected to the tables
+     * before it by exactly one join predicate. Tables are checked in
+     * {@code FROM}-list order, so the error names the first offending table.
+     *
+     * <p>
+     * Simplification: only one connecting predicate per table is supported; a
+     * second one is rejected rather than applied as a filter on the join output.
+     *
+     * @param joinsByTable connecting join predicates per table, from
+     *                     {@link #assignJoinsToTables}
+     * @param tableNames   tables in {@code FROM}-list order
+     * @throws IllegalArgumentException if no predicate or more than one predicate
+     *                                  connects a table to the tables before it
+     */
+    private static void requireOneConnectingJoinPerTable(List<List<JoinPredicate>> joinsByTable,
+            List<String> tableNames) {
+        for (int tablePosition = 1; tablePosition < tableNames.size(); tablePosition++) {
+            List<JoinPredicate> connecting = joinsByTable.get(tablePosition);
+            String tableName = tableNames.get(tablePosition);
+            if (connecting.isEmpty()) {
+                String earlierTables = String.join(", ", tableNames.subList(0, tablePosition));
+                throw new IllegalArgumentException("table " + tableName
+                        + " is not connected by a join predicate to the tables before it (" + earlierTables
+                        + "); reorder the FROM list so that each table joins a table listed before it");
+            }
+            if (connecting.size() > 1) {
+                throw new IllegalArgumentException("table " + tableName + " is connected by "
+                        + connecting.size() + " join predicates (" + describeJoins(connecting)
+                        + "); only one join predicate per table is supported");
+            }
+        }
+    }
+
+    /**
      * Joins the next table's pipeline onto the tables joined so far: the
      * intermediate result is the build side and the new table probes.
      *
@@ -206,16 +272,13 @@ public final class Planner {
      *                      {@code 0..tablePosition-1}
      * @param probe         pipeline of the new table
      * @param tablePosition {@code FROM}-list position of the new table
-     * @param statement     the select statement, for its join predicates and
-     *                      table names
+     * @param connecting    the join predicate connecting the new table to the
+     *                      earlier ones
      * @param resolver      column resolver over the {@code FROM}-list schemas
      * @return hash join of the two pipelines
-     * @throws IllegalArgumentException if no join predicate, or more than one,
-     *                                  connects the new table to the earlier ones
      */
     private static Operator planJoin(Operator joinedSoFar, Operator probe, int tablePosition,
-            SelectStatement statement, ColumnResolver resolver) {
-        JoinPredicate connecting = findConnectingJoin(statement, tablePosition, resolver);
+            JoinPredicate connecting, ColumnResolver resolver) {
         ResolvedColumn left = resolver.resolve(connecting.leftColumn());
         ResolvedColumn right = resolver.resolve(connecting.rightColumn());
         boolean leftIsNewTable = left.tablePosition() == tablePosition;
@@ -223,42 +286,6 @@ public final class Planner {
         ResolvedColumn joinedSide = leftIsNewTable ? right : left;
         return new HashJoinOperator(joinedSoFar, probe, joinedSide.joinedIndex(),
                 newTableSide.columnIndexInTable());
-    }
-
-    /**
-     * Finds the join predicate that connects a table to the tables listed before
-     * it. A predicate connects table {@code i} exactly when the later of its two
-     * tables is {@code i}, so every predicate belongs to exactly one fold step.
-     *
-     * <p>
-     * Simplification: only one connecting predicate per table is supported; a
-     * second one is rejected rather than applied as a filter on the join output.
-     *
-     * @param statement     the select statement
-     * @param tablePosition {@code FROM}-list position of the new table
-     * @param resolver      column resolver over the {@code FROM}-list schemas
-     * @return the single connecting join predicate
-     * @throws IllegalArgumentException if no predicate or more than one predicate
-     *                                  connects the table
-     */
-    private static JoinPredicate findConnectingJoin(SelectStatement statement, int tablePosition,
-            ColumnResolver resolver) {
-        List<JoinPredicate> connecting = statement.joins().stream()
-                .filter(join -> laterTablePosition(join, resolver) == tablePosition)
-                .toList();
-        String tableName = statement.tableNames().get(tablePosition);
-        if (connecting.isEmpty()) {
-            String earlierTables = String.join(", ", statement.tableNames().subList(0, tablePosition));
-            throw new IllegalArgumentException("table " + tableName
-                    + " is not connected by a join predicate to the tables before it (" + earlierTables
-                    + "); reorder the FROM list so that each table joins a table listed before it");
-        }
-        if (connecting.size() > 1) {
-            throw new IllegalArgumentException("table " + tableName + " is connected by "
-                    + connecting.size() + " join predicates (" + describeJoins(connecting)
-                    + "); only one join predicate per table is supported");
-        }
-        return connecting.getFirst();
     }
 
     /**
