@@ -3,6 +3,7 @@ package datasys.semi.executor;
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.slf4j.Logger;
@@ -90,10 +91,7 @@ public final class Executor {
      * Parses and executes a multi-statement SQL script.
      *
      * @param sql script containing one or more semicolon-separated statements
-     * @throws IllegalArgumentException      if {@code sql} is null or execution
-     *                                       fails
-     * @throws UnsupportedOperationException if a SELECT lists more than one
-     *                                       table (until hash joins are planned)
+     * @throws IllegalArgumentException if {@code sql} is null or execution fails
      */
     public void execute(String sql) {
         if (sql == null) {
@@ -111,10 +109,8 @@ public final class Executor {
      * Executes a list of parsed statements, tracking statement numbers in the MDC.
      *
      * @param statements statements to bind and execute
-     * @throws IllegalArgumentException      if {@code statements} is null or
-     *                                       execution fails
-     * @throws UnsupportedOperationException if a SELECT lists more than one
-     *                                       table (until hash joins are planned)
+     * @throws IllegalArgumentException if {@code statements} is null or execution
+     *                                  fails
      */
     public void execute(List<Statement> statements) {
         if (statements == null) {
@@ -145,11 +141,8 @@ public final class Executor {
      *
      * @param sql SQL query string containing a single SELECT statement
      * @return list of rows produced by the query
-     * @throws IllegalArgumentException      if SQL does not yield exactly one
-     *                                       SELECT statement, or binding or
-     *                                       planning fails
-     * @throws UnsupportedOperationException if the SELECT lists more than one
-     *                                       table (until hash joins are planned)
+     * @throws IllegalArgumentException if SQL does not yield exactly one SELECT
+     *                                  statement, or binding or planning fails
      */
     public List<Object[]> executeQuery(String sql) {
         MDC.put("statementNumber", "1");
@@ -159,9 +152,9 @@ public final class Executor {
             List<Object[]> rows = new ArrayList<>();
             runPinnedAll(select.tableNames(), snapshots -> {
                 Operator plan = bindAndPlanSelect(select, snapshots);
-                ScanStats stats = planner.lastScanStats();
+                Map<String, ScanStats> statsByTable = planner.lastScanStatsByTable();
                 rows.addAll(drainToList(plan));
-                logSelectSummary(select.tableNames().getFirst(), rows.size(), stats, started);
+                logSelectSummaries(rows.size(), statsByTable, started);
             });
             return rows;
         } catch (RuntimeException exception) {
@@ -266,28 +259,17 @@ public final class Executor {
     }
 
     /**
-     * Binds a {@code SELECT} against its pinned snapshots and plans it.
-     *
-     * <p>
-     * Temporary guard until hash join chains are planned (Exercise 10 section
-     * 4): the single-table planner would scan only the first {@code FROM} table,
-     * so a bound multi-table statement is rejected explicitly instead of
-     * returning wrong rows.
+     * Binds a {@code SELECT} against its pinned snapshots and plans it; joins of
+     * several tables are planned left-deep in {@code FROM}-list order.
      *
      * @param statement SELECT statement
      * @param snapshots pinned catalog snapshots in {@code FROM}-list order
      * @return root operator of the planned pipeline
-     * @throws IllegalArgumentException      if binding or planning fails
-     * @throws UnsupportedOperationException if the statement lists more than one
-     *                                       table
+     * @throws IllegalArgumentException if binding or planning fails
      */
     private Operator bindAndPlanSelect(SelectStatement statement, List<Catalog> snapshots) {
         binder.bind(statement, snapshots);
-        if (snapshots.size() > 1) {
-            throw new UnsupportedOperationException("multi-table SELECT execution is not supported yet: "
-                    + String.join(", ", statement.tableNames()));
-        }
-        return planner.plan(statement, snapshots.getFirst());
+        return planner.plan(statement, snapshots);
     }
 
     /**
@@ -364,9 +346,23 @@ public final class Executor {
      */
     private void executeSelect(SelectStatement statement, List<Catalog> snapshots, long started) {
         Operator plan = bindAndPlanSelect(statement, snapshots);
-        ScanStats stats = planner.lastScanStats();
+        Map<String, ScanStats> statsByTable = planner.lastScanStatsByTable();
         long rowsOut = drainToOutput(plan);
-        logSelectSummary(statement.tableNames().getFirst(), rowsOut, stats, started);
+        logSelectSummaries(rowsOut, statsByTable, started);
+    }
+
+    /**
+     * Logs one summary line per {@code FROM} table of a completed {@code SELECT}
+     * statement, in {@code FROM}-list order. Each line carries that table's
+     * partition counts and version and the statement's output row count, so the
+     * line format is the same for single-table and multi-table queries.
+     *
+     * @param rowsOut      number of rows emitted by the query
+     * @param statsByTable scan statistics per table, in {@code FROM}-list order
+     * @param started      nano timestamp when execution started
+     */
+    private static void logSelectSummaries(long rowsOut, Map<String, ScanStats> statsByTable, long started) {
+        statsByTable.forEach((tableName, stats) -> logSelectSummary(tableName, rowsOut, stats, started));
     }
 
     /**
