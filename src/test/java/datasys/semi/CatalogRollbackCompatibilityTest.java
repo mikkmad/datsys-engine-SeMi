@@ -114,8 +114,8 @@ class CatalogRollbackCompatibilityTest {
         assertEquals(2L, next.version());
         assertEquals(2 * ROWS_PER_COPY, countRows(engine, next));
         String nextJson = Files.readString(catalogFile(2));
-        assertTrue(Files.readString(catalogFile(1)).contains("\"ndv\""));
-        assertFalse(nextJson.contains("ndv"));
+        assertTrue(Files.readString(catalogFile(1)).contains("\"futureStatistic\""));
+        assertFalse(nextJson.contains("futureStatistic"));
         assertFalse(nextJson.contains("futureField"));
     }
 
@@ -135,7 +135,7 @@ class CatalogRollbackCompatibilityTest {
         for (JsonNode partition : catalog.get("partitions")) {
             ((ObjectNode) partition).put("futureField", "partition");
             for (JsonNode statistics : partition.get("statistics")) {
-                ((ObjectNode) statistics).put("ndv", 2);
+                ((ObjectNode) statistics).put("futureStatistic", 2);
             }
         }
         objectMapper.writeValue(catalogFile.toFile(), catalog);
