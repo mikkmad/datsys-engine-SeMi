@@ -32,6 +32,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -1442,11 +1443,19 @@ public final class StorageEngine {
     /**
      * Immutable versioned table catalog snapshot.
      *
-     * @param table      table name
+     * <p>{@code Catalog} and every record nested in it ({@link Column},
+     * {@link Partition}, {@link Statistics}) ignore unknown JSON fields, so a
+     * catalog written by a newer engine version (for example one that adds an
+     * {@code ndv} statistic) still loads after a rollback. The unknown fields are
+     * dropped on the next commit. A new record persisted inside the catalog must
+     * carry the same annotation.
+     *
+     * @param table     table name
      * @param version    monotonically increasing catalog version (0 at creation)
      * @param schema     ordered column definitions
      * @param partitions ordered immutable partition descriptors
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Catalog(String table, long version, List<Column> schema, List<Partition> partitions) {
 
         /**
@@ -1501,6 +1510,7 @@ public final class StorageEngine {
      * @param name column name
      * @param type column type name matching {@link ColumnType}
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Column(
             @JsonProperty("column_name") String name,
             @JsonProperty("column_type") String type) {
@@ -1515,6 +1525,7 @@ public final class StorageEngine {
      * @param rowCount   number of rows stored in the partition
      * @param statistics per-column min/max summaries keyed by column name
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Partition(String path, int rowCount, Map<String, Statistics> statistics) {
 
         /**
@@ -1533,6 +1544,7 @@ public final class StorageEngine {
      * @param min minimum value serialized as a string
      * @param max maximum value serialized as a string
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Statistics(String min, String max) {
     }
 
