@@ -1479,12 +1479,12 @@ public final class StorageEngine {
      *
      * <p>{@code Catalog} and every record nested in it ({@link Column},
      * {@link Partition}, {@link Statistics}) ignore unknown JSON fields, so a
-     * catalog written by a newer engine version (for example one that adds an
-     * {@code ndv} statistic) still loads after a rollback. The unknown fields are
+     * catalog written by a newer engine version (for example one that adds a new
+     * column statistic) still loads after a rollback. The unknown fields are
      * dropped on the next commit. A new record persisted inside the catalog must
      * carry the same annotation.
      *
-     * @param table     table name
+     * @param table      table name
      * @param version    monotonically increasing catalog version (0 at creation)
      * @param schema     ordered column definitions
      * @param partitions ordered immutable partition descriptors

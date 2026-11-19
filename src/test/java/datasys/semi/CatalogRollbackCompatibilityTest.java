@@ -25,7 +25,7 @@ import datasys.semi.schema.ColumnType;
 
 /**
  * Tests that the engine opens catalogs written by a newer engine version (for
- * example version 11, which adds an {@code ndv} statistic), so rolling back to
+ * example a later version that adds a new column statistic), so rolling back to
  * this version keeps every table usable. Unknown fields are injected at every
  * nesting level of the catalog JSON, so a persisted record that is missing
  * {@code @JsonIgnoreProperties(ignoreUnknown = true)} fails these tests.
