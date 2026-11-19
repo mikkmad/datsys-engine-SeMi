@@ -33,6 +33,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -531,6 +532,23 @@ public final class StorageEngine {
         return new MinMax(min, max);
     }
 
+    /**
+     * Counts the exact number of distinct values (NDV) in a list of column values
+     * with a hash set. Exact counting is sufficient at course scale; see
+     * {@code docs/optimizer-design.md} for the sketch used at a billion rows.
+     *
+     * @param values non-empty list of non-null column values
+     * @return number of distinct values, between 1 and {@code values.size()}
+     * @throws IllegalArgumentException if {@code values} is null or empty
+     */
+    public long distinctCount(List<Object> values) {
+        if (values == null || values.isEmpty()) {
+            throw new IllegalArgumentException("values must not be empty");
+        }
+
+        return new HashSet<>(values).size();
+    }
+
     // --- Internal Storage & Partition Management ---
 
     /**
@@ -945,7 +963,7 @@ public final class StorageEngine {
     /**
      * Writes one buffered partition to {@code partition-<uuid>.dat} via a temporary
      * file and an atomic move, records its path in {@code writtenFiles}, and
-     * computes and logs its min/max statistics.
+     * computes and logs its min/max and NDV statistics.
      *
      * @param tableName       table owning the partition
      * @param tableDirectory  directory receiving the partition file
@@ -1111,13 +1129,14 @@ public final class StorageEngine {
     }
 
     /**
-     * Computes per-column min/max statistics for a partition and logs each summary.
+     * Computes per-column min/max and NDV statistics for a partition and logs each
+     * summary.
      *
      * @param rows            non-empty partition rows
      * @param schema          table schema in column order
      * @param tableName       table name for logging
      * @param partitionNumber catalog-wide partition ordinal for logging
-     * @return map from column name to min/max statistics
+     * @return map from column name to min/max/NDV statistics
      */
     private Map<String, Statistics> computeStatistics(List<Object[]> rows, List<Column> schema, String tableName,
             int partitionNumber) {
@@ -1126,20 +1145,35 @@ public final class StorageEngine {
         for (int column = 0; column < schema.size(); column++) {
             int columnIndex = column;
             List<Object> values = rows.stream().map(row -> row[columnIndex]).toList();
-            MinMax columnStatistics = minMax(values);
-
-            Object min = columnStatistics.min();
-            Object max = columnStatistics.max();
             String columnName = schema.get(column).name();
-
-            statistics.put(columnName, new Statistics(String.valueOf(min), String.valueOf(max)));
-
-            LOGGER.debug("table={} partition={} column={} min={} max={}",
-                    tableName, partitionNumber, columnName,
-                    LogSanitizer.sanitize(min), LogSanitizer.sanitize(max));
+            statistics.put(columnName, computeColumnStatistics(values, tableName, partitionNumber, columnName));
         }
 
         return statistics;
+    }
+
+    /**
+     * Computes the min/max and the exact NDV of one column of a partition, logging
+     * the min/max and the NDV on separate lines as each is created.
+     *
+     * @param values          non-empty values of the column, one per row
+     * @param tableName       table name for logging
+     * @param partitionNumber catalog-wide partition ordinal for logging
+     * @param columnName      column name for logging
+     * @return statistics of the column in this partition
+     */
+    private Statistics computeColumnStatistics(List<Object> values, String tableName, int partitionNumber,
+            String columnName) {
+        MinMax minMax = minMax(values);
+        LOGGER.debug("table={} partition={} column={} min={} max={}",
+                tableName, partitionNumber, columnName,
+                LogSanitizer.sanitize(minMax.min()), LogSanitizer.sanitize(minMax.max()));
+
+        long ndv = distinctCount(values);
+        LOGGER.debug("table={} partition={} column={} rows={} ndv={}",
+                tableName, partitionNumber, columnName, values.size(), ndv);
+
+        return new Statistics(String.valueOf(minMax.min()), String.valueOf(minMax.max()), ndv);
     }
 
     // --- Type Parsing & Serialization Helpers ---
@@ -1523,7 +1557,7 @@ public final class StorageEngine {
      * @param path       relative path to the partition file from
      *                   {@code dataDirectory}
      * @param rowCount   number of rows stored in the partition
-     * @param statistics per-column min/max summaries keyed by column name
+     * @param statistics per-column min/max/NDV summaries keyed by column name
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Partition(String path, int rowCount, Map<String, Statistics> statistics) {
@@ -1535,17 +1569,44 @@ public final class StorageEngine {
         public Partition {
             statistics = statistics == null ? Map.of() : Map.copyOf(statistics);
         }
+
+        /**
+         * Returns the number of distinct values of one column in this partition. A
+         * partition written before NDV was collected has no stored NDV; its
+         * {@code rowCount} is returned instead, which is an upper bound because a
+         * partition never has more distinct values than rows.
+         *
+         * @param columnName column whose NDV is requested
+         * @return stored NDV, or {@code rowCount} when the NDV is missing
+         * @throws IllegalArgumentException if the partition has no statistics for
+         *                                  {@code columnName}
+         */
+        public long columnNdv(String columnName) {
+            Statistics columnStatistics = statistics.get(columnName);
+            if (columnStatistics == null) {
+                throw new IllegalArgumentException("no statistics for column " + columnName + " in " + path);
+            }
+            return columnStatistics.ndv() == null ? rowCount : columnStatistics.ndv();
+        }
     }
 
     /**
-     * Immutable string-serialized minimum and maximum values for a single column in
-     * a partition.
+     * Immutable statistics for a single column in a partition: string-serialized
+     * minimum and maximum values and the exact number of distinct values.
+     *
+     * <p>{@code ndv} is {@code null} for partitions written before NDV was
+     * collected. A {@code null} NDV is left out of the JSON instead of being
+     * written as {@code "ndv": null}; use {@link Partition#columnNdv(String)} for
+     * the fallback value.
      *
      * @param min minimum value serialized as a string
      * @param max maximum value serialized as a string
+     * @param ndv number of distinct values in the partition, or {@code null} when
+     *            unknown
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Statistics(String min, String max) {
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Statistics(String min, String max, Long ndv) {
     }
 
     /**
