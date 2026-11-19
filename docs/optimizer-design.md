@@ -8,7 +8,7 @@ The NDVs will be summed per partition, and caps at the total row count. This is 
 
 ## **Roll forward**: 
 
-**Rolling back** (downgrading), the NDV field will be treated as an unknown JSON property, and `Jackson` will throw `UnrecognizedPropertyException`, which the StorageEngine will log as an `IllegalStateException` error. By adding `@JsonIgnoreProperties(ignoreUnknown = true)` to the `Catalog`, `Partition`, and the `Statistics` class, we can ignore the missing property and continue to use the table, and avoid the `IllegalStateException` error. This is a retrofit upgrade to the code, which would make downgrading safe, but the NDV statistic would be lost.
+**Rolling back** (downgrading), the NDV field will be treated as an unknown JSON property, and `Jackson` will throw `UnrecognizedPropertyException`, which the StorageEngine will log as an `IllegalStateException` error. By adding `@JsonIgnoreProperties(ignoreUnknown = true)` to the `Catalog`, `Partition`, `Column` and the `Statistics` class, we can ignore the missing property and continue to use the table, and avoid the `IllegalStateException` error. This is a retrofit upgrade to the code, which would make downgrading safe, but the NDV statistic would be lost.
 
 **Rolling forward** (upgrading), the NDV statistic should be calculated on the first scan if it is missing. That way we ensure that all tables will have the statistic after it have been used once.
 
