@@ -30,6 +30,7 @@ import datasys.semi.operators.HashJoinOperator;
 import datasys.semi.operators.Operator;
 import datasys.semi.operators.ProjectOperator;
 import datasys.semi.operators.ScanOperator;
+import datasys.semi.optimizer.JoinOrderMode;
 import datasys.semi.parser.Binder;
 import datasys.semi.parser.SqlParser;
 import datasys.semi.planner.Planner;
@@ -37,10 +38,16 @@ import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
 
 /**
- * Exercise 10 Required Test 5: the planner builds left-deep hash join chains in
- * FROM-list order with filters below the joins, per-table pruning stays visible
- * in ScanStats, and unconnected FROM lists are rejected. Also checks the four
- * testbed queries of section 5 end to end through the Executor.
+ * Exercise 10 Required Test 5, under {@code -j syntax}: the planner builds
+ * left-deep hash join chains in FROM-list order with filters below the joins,
+ * per-table pruning stays visible in ScanStats, and unconnected FROM lists are
+ * rejected. Also checks the four testbed queries of section 5 end to end
+ * through the Executor.
+ *
+ * <p>
+ * Exercise 11 Required Test 5: under {@code -j optimized}, a rearranged plan
+ * still emits {@code SELECT *} and column lists in FROM-list order, identical
+ * to {@code -j syntax}.
  *
  * <p>
  * The engine stores at most two rows per partition, so orders and customers
@@ -65,6 +72,7 @@ class JoinPlannerTest {
     private StorageEngine engine;
     private Binder binder;
     private Planner planner;
+    private Planner optimizedPlanner;
 
     @BeforeEach
     void setUp(@TempDir Path directory) throws IOException {
@@ -86,7 +94,8 @@ class JoinPlannerTest {
                 new ColumnSpec("ct_country", ColumnType.STRING),
                 new ColumnSpec("ct_population", ColumnType.LONG)));
         binder = new Binder(engine);
-        planner = new Planner(engine);
+        planner = new Planner(engine, JoinOrderMode.SYNTAX);
+        optimizedPlanner = new Planner(engine, JoinOrderMode.OPTIMIZED);
     }
 
     /**
@@ -272,6 +281,66 @@ class JoinPlannerTest {
     }
 
     /**
+     * Exercise 11 Required Test 5: customers (3 rows) is estimated smaller than
+     * orders (4 rows), so the optimized plan lets customers build. The joined row
+     * then starts with the customers columns, and a projection restores the
+     * FROM-list order: the rows equal those of the syntax plan.
+     */
+    @Test
+    void rearrangedPlanStillEmitsSelectStarColumnsInFromListOrder() {
+        Operator optimized = plan(ORDERS_CUSTOMERS, optimizedPlanner);
+
+        ProjectOperator restoreFromListOrder = assertInstanceOf(ProjectOperator.class, optimized);
+        HashJoinOperator join = assertInstanceOf(HashJoinOperator.class, restoreFromListOrder.child());
+        assertEquals("customers", assertInstanceOf(ScanOperator.class, join.build()).tableName());
+        assertEquals("orders", assertInstanceOf(ScanOperator.class, join.probe()).tableName());
+        assertEquals(0, join.buildKey());
+        assertEquals(1, join.probeKey());
+        assertEquals(drainSorted(plan(ORDERS_CUSTOMERS)), drainSorted(optimized));
+    }
+
+    /**
+     * Exercise 11 Required Test 5: a column list is resolved through the
+     * rearranged layout, so it selects the same values as under the syntax plan.
+     */
+    @Test
+    void rearrangedPlanResolvesColumnListThroughJoinedLayout() {
+        String sql = "SELECT c_city, o_orderkey, p_price FROM orders, customers, products "
+                + "WHERE o_custname = c_name AND o_prodname = p_name;";
+
+        assertEquals(drainSorted(plan(sql)), drainSorted(plan(sql, optimizedPlanner)));
+    }
+
+    /**
+     * Exercise 11 Required Test 5: the testbed queries with two, three and four
+     * tables print identical rows, with identical column order, under both join
+     * order modes.
+     */
+    @Test
+    void testbedQueriesPrintIdenticalRowsUnderBothJoinOrderModes() {
+        for (String sql : List.of(ORDERS_CUSTOMERS, ORDERS_CUSTOMERS_PRODUCTS, FOUR_TABLES, COPENHAGEN_ONLY)) {
+            assertEquals(executeSorted(sql, JoinOrderMode.SYNTAX), executeSorted(sql, JoinOrderMode.OPTIMIZED),
+                    sql);
+        }
+    }
+
+    /**
+     * Verifies that the optimized planner does not depend on the FROM-list order
+     * for connectivity, but still rejects a query that needs a cross product.
+     */
+    @Test
+    void optimizedPlannerReordersUnconnectedFromListButRejectsCrossProducts() {
+        String unconnectedInFromOrder = "SELECT * FROM orders, cities, customers "
+                + "WHERE o_custname = c_name AND c_city = ct_city;";
+        assertEquals(4, drainSorted(plan(unconnectedInFromOrder, optimizedPlanner)).size());
+
+        IllegalArgumentException crossProduct = assertThrows(IllegalArgumentException.class,
+                () -> plan("SELECT * FROM orders, customers;", optimizedPlanner));
+        assertEquals("no join predicate connects the FROM tables (orders+customers); "
+                + "cross products are not supported", crossProduct.getMessage());
+    }
+
+    /**
      * Creates a testbed table and loads its CSV from the test resources.
      *
      * @param directory temporary engine directory
@@ -292,10 +361,21 @@ class JoinPlannerTest {
      * @return the planned operator tree
      */
     private Operator plan(String sql) {
+        return plan(sql, planner);
+    }
+
+    /**
+     * Parses, binds and plans one SELECT with the given planner.
+     *
+     * @param sql            SQL text with one SELECT statement
+     * @param chosenPlanner  planner in the wanted join order mode
+     * @return the planned operator tree
+     */
+    private Operator plan(String sql, Planner chosenPlanner) {
         SelectStatement select = (SelectStatement) parser.parse(sql).getFirst();
         List<Catalog> snapshots = select.tableNames().stream().map(engine::snapshot).toList();
         binder.bind(select, snapshots);
-        return planner.plan(select, snapshots);
+        return chosenPlanner.plan(select, snapshots);
     }
 
     /**
@@ -335,8 +415,20 @@ class JoinPlannerTest {
      * @return output lines, sorted
      */
     private List<String> executeSorted(String sql) {
+        return executeSorted(sql, JoinOrderMode.SYNTAX);
+    }
+
+    /**
+     * Executes one SELECT through an Executor in the given join order mode and
+     * returns its sorted CSV output.
+     *
+     * @param sql           SQL text with one SELECT statement
+     * @param joinOrderMode join order mode of the executor
+     * @return output lines, sorted
+     */
+    private List<String> executeSorted(String sql, JoinOrderMode joinOrderMode) {
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        new Executor(engine, new PrintStream(buffer, true, StandardCharsets.UTF_8)).execute(sql);
+        new Executor(engine, new PrintStream(buffer, true, StandardCharsets.UTF_8), joinOrderMode).execute(sql);
         return buffer.toString(StandardCharsets.UTF_8).lines().sorted().toList();
     }
 }

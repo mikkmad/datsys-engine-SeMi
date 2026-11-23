@@ -61,4 +61,22 @@ public final class ProjectOperator implements Operator {
     public void close() {
         child.close();
     }
+
+    /**
+     * Returns the child operator whose rows this projection narrows or reorders.
+     *
+     * @return the child operator
+     */
+    public Operator child() {
+        return child;
+    }
+
+    /**
+     * Returns the child column positions this projection emits, in output order.
+     *
+     * @return a copy of the column indices
+     */
+    public int[] columnIndices() {
+        return columnIndices.clone();
+    }
 }
