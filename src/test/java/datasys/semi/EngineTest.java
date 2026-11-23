@@ -87,4 +87,52 @@ class EngineTest {
         assertTrue(stdout.isEmpty());
         assertTrue(stderr.contains("Error:"));
     }
+
+    /**
+     * Verifies that {@code -j syntax} and {@code -j optimized} are accepted before
+     * or after {@code -c}.
+     *
+     * @param tempDir temporary data directory
+     */
+    @Test
+    void joinOrderFlagIsAcceptedBeforeOrAfterStatementFlag(@TempDir Path tempDir) {
+        String sql = "CREATE TABLE t (a LONG); SELECT * FROM t;";
+
+        assertEquals("", runAndCaptureErr(new String[] { "-j", "syntax", "-c", sql }, tempDir.resolve("one")));
+        assertEquals("", runAndCaptureErr(new String[] { "-c", sql, "-j", "optimized" }, tempDir.resolve("two")));
+    }
+
+    /**
+     * Verifies that an unknown join order mode, a repeated flag, or both
+     * {@code -c} and {@code -f} are rejected on standard error.
+     *
+     * @param tempDir temporary data directory
+     */
+    @Test
+    void invalidJoinOrderArgumentsAreRejected(@TempDir Path tempDir) {
+        String unknownMode = runAndCaptureErr(new String[] { "-j", "fastest", "-c", "SELECT * FROM t;" }, tempDir);
+        assertTrue(unknownMode.contains("unknown join order mode: fastest"), unknownMode);
+
+        assertTrue(runAndCaptureErr(new String[] { "-j", "syntax", "-j", "optimized" }, tempDir)
+                .contains("invalid arguments"));
+        assertTrue(runAndCaptureErr(new String[] { "-c", "SELECT 1;", "-f", "x.sql" }, tempDir)
+                .contains("invalid arguments"));
+        assertTrue(runAndCaptureErr(new String[] { "-c", "SELECT 1;", "-j" }, tempDir)
+                .contains("invalid arguments"));
+    }
+
+    /**
+     * Runs the engine and returns what it wrote to standard error.
+     *
+     * @param args    command-line arguments
+     * @param dataDir data directory for the run
+     * @return standard error output
+     */
+    private static String runAndCaptureErr(String[] args, Path dataDir) {
+        ByteArrayOutputStream errContent = new ByteArrayOutputStream();
+        PrintStream out = new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8);
+        PrintStream err = new PrintStream(errContent, true, StandardCharsets.UTF_8);
+        Engine.run(args, dataDir, out, err);
+        return errContent.toString(StandardCharsets.UTF_8);
+    }
 }
