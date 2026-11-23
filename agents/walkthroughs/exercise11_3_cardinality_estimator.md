@@ -21,6 +21,7 @@ estimator in §4.
 | File | Change |
 |------|--------|
 | `optimizer/CardinalityEstimator.java` *(new)* | `baseTableRows`, `columnNdv` (via `NdvMerger.tableNdv`; a missing NDV or missing column statistics count as `rowCount`), `filterSelectivity`, `filteredTableRows`, `equiJoinRows`, `SELINGER_RANGE_SELECTIVITY`. Stateless, no logging, `double` estimates. |
+| ↳ streams | `baseTableRows` is `stream().mapToLong(Partition::rowCount).sum()`. `filteredTableRows` maps each filter to its selectivity through the private helper `selectivityOf` (resolve column, then `filterSelectivity`) and multiplies them with `reduce(1.0, ...)`, so no filters gives `\|R\|`. The streams are sequential on purpose: summing a few dozen in-memory row counts takes nanoseconds, less than the fork/join overhead of `parallel()`. |
 | `CardinalityEstimatorTest.java` *(new)* | 20 unit tests on hand-made statistics (§8.2). |
 | `docs/optimizer-design.md` | Estimator table now includes per-partition interpolation, the 1/3 fallback, independence and the equi-join row; NDV scope = surviving partitions; intermediate-result NDV assumption; sources (Selinger et al. 1979, Lecture 10). |
 
