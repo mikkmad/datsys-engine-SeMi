@@ -43,7 +43,7 @@ Wiring the estimator into the `Planner` is **out of scope** (§4, next sub-exerc
 
 | File | Change |
 |------|--------|
-| `optimizer/CardinalityEstimator.java` *(new)* | `baseTableRows`, `columnNdv`, `filterSelectivity`, `filteredTableRows`, `equiJoinRows`, constant `SELINGER_RANGE_SELECTIVITY = 1/3`. |
+| `optimizer/CardinalityEstimator.java` *(new)* | `baseTableRows`, `columnNdv`, `filterSelectivity`, `filteredTableRows`, `equiJoinRows`, constant `SELINGER_RANGE_SELECTIVITY = 1/3`. `baseTableRows` sums with a stream (`mapToLong(...).sum()`); `filteredTableRows` multiplies the selectivities with `mapToDouble(...).reduce(1.0, ...)` via a private helper `selectivityOf`, matching the formula `\|R\| · ∏ selᵢ` (AGENTS.md §3.2.7). Sequential streams only: a table has at most dozens of partitions and a few filters, so `parallel()` would cost more than it saves. |
 | `test/.../CardinalityEstimatorTest.java` *(new)* | §8.2: hand-made `Partition`s produce the expected base, filtered and join estimates. |
 | `docs/optimizer-design.md` | Range rule decided (interpolate, 1/3 fallback); NDV scope = surviving partitions; equi-join row with its source; independence of filters; intermediate-result NDV assumption. |
 
