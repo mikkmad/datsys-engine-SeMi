@@ -40,4 +40,4 @@ We will use Greedy smallest-intermediate-first. With at most four tables, exhaus
 ### Literature
 [1] P. G. Selinger, M. M. Astrahan, D. D. Chamberlin, R. A. Lorie, and T. G. Price, "Access path selection in a relational database management system," in Proceedings of the 1979 ACM SIGMOD International Conference on Management of Data, Boston, MA, USA, May 1979, pp. 23–34, doi: 10.1145/582095.582099.
 
-[2] Lecture 10 slides, "Joins: Algorithms and Multi-Way Plans", How to Build Data Systems, Fall 2026.
+[2] Slides from Lecture 11, "The Optimizer: Cardinality Estimation, Join Ordering", How to Build Data Systems, Fall 2026.
