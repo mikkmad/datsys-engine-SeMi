@@ -19,18 +19,18 @@ The estimator (`optimizer/CardinalityEstimator`) will use the following formulas
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | Scan                            | Sum of the rows of the partitions that survive pruning                                                                                                   | None: the only exact number                                            |
 | Equality filter `col = x`       | $\frac{\lvert R \rvert}{\mathrm{ndv}(col)}$                                                                                                              | Uniformity: every value is equally frequent                            |
-| Range filter `col<x`, `col>x`   | $\sum_p \lvert p \rvert \cdot \frac{x - \min_p}{\max_p - \min_p}$ (for `>`: $\frac{\max_p - x}{\max_p - \min_p}$), clamped to $[0, 1]$ per partition $p$ | Uniformity between min and max                                         |
+| Range filter `col < x`          | $\sum_p \lvert p \rvert \cdot \frac{x - \min_p}{\max_p - \min_p}$ [1]                                                                                    | Uniformity between min and max                                         |
+| Range filter `col > x`          | $\sum_p \lvert p \rvert \cdot \frac{\max_p - x}{\max_p - \min_p}$ [1]                                                                                    | Uniformity between min and max                                         |
 | Range filter, no usable min/max | $\frac{\lvert R \rvert}{3}$                                                                                                                              | None: the statistics cannot answer                                     |
-| Several filters on one table    | $\lvert R \rvert \cdot \prod_i \mathrm{sel}_i$                                                                                                           | Independence of the filtered columns                                   |
 | Equi-join `R.a = S.b`           | $\frac{\lvert R \rvert \cdot \lvert S \rvert}{\max(\mathrm{ndv}(R.a),\ \mathrm{ndv}(S.b))}$                                                              | Containment: the smaller key set's values all appear in the larger one |
 
 - $\lvert R \rvert$ = cardinality of $R$ = number of rows of $R$ **after pruning**: the sum of the row counts of the surviving partitions.
 - $\mathrm{ndv}(col)$ is the number of distinct values of column $col$, merged with the sum rule over the **same surviving partitions** as $\lvert R \rvert$.
 - Selectivity: the fraction of rows a predicate keeps. Equality: $\frac{1}{\mathrm{ndv}(col)}$.
-- **Range filters** interpolate per surviving partition, using that partition's own min/max, and weight the result by its row count. `STRING` columns cannot be interpolated, and partitions without statistics have no min/max; both fall back to $\frac{1}{3}$.
+- **Range filters** interpolate per surviving partition ($p$), using that partition's own min/max ($\min_p$/$\max_p$), clamp the fraction to $[0, 1]$, and weight the result by its row count ($\lvert p \rvert$). `STRING` columns cannot be interpolated, and partitions without statistics have no min/max; both fall back to $\frac{1}{3}$.
   - $\frac{1}{3}$ is System R's "magic constant" when the statistics cannot answer [1].
-- **Independence** of several filters on one table is also System R's assumption [1]. Correlated columns make the product too small.
-- **Equi-join**: the formula is from Lecture 10 [2]. Its selectivity $\frac{1}{\max(\mathrm{ndv})}$ is System R's rule for `col1 = col2` [1]. If both inputs are empty, both NDVs are 0 and the estimate is 0.
+- **Several filters**: we multiply their selectivities, which assumes the columns are independent [1].
+- **Equi-join**: the formula is from Lecture 11 [2]. Its selectivity $\frac{1}{\max(\mathrm{ndv})}$ is System R's rule for `col1 = col2` [1]. If both inputs are empty, both NDVs are 0 and the estimate is 0.
 - **Intermediate results**: later joins in a chain need the NDV of a column of an intermediate result. We approximate it by the NDV of the base table that contributed the column, over that table's surviving partitions. 
 - Estimates are kept as `double` through a chain of joins and rounded only when logged, so rounding each step does not add up.
 
