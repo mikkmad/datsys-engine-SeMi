@@ -53,11 +53,9 @@ public final class CardinalityEstimator {
      */
     public static long baseTableRows(List<Partition> survivingPartitions) {
         requireNonNull(survivingPartitions, "survivingPartitions");
-        long rowCount = 0;
-        for (Partition partition : survivingPartitions) {
-            rowCount += partition.rowCount();
-        }
-        return rowCount;
+        return survivingPartitions.stream()
+                .mapToLong(Partition::rowCount)
+                .sum();
     }
 
     /**
@@ -93,15 +91,32 @@ public final class CardinalityEstimator {
      *                                  non-numeric constant
      */
     public static double filteredTableRows(List<Partition> survivingPartitions, List<ColumnSpec> schema,
-            List<Predicate> filters) {
+                                           List<Predicate> filters) {
         requireNonNull(schema, "schema");
         requireNonNull(filters, "filters");
-        double estimatedRows = baseTableRows(survivingPartitions);
-        for (Predicate filter : filters) {
-            ColumnSpec column = findColumn(schema, filter.columnName());
-            estimatedRows *= filterSelectivity(survivingPartitions, column, filter.comparison(), filter.constant());
-        }
-        return estimatedRows;
+        long baseRows = baseTableRows(survivingPartitions);
+        double combinedSelectivity = filters.stream()
+                .mapToDouble(filter -> selectivityOf(survivingPartitions, schema, filter))
+                .reduce(1.0, (product, selectivity) -> product * selectivity);
+        return baseRows * combinedSelectivity;
+    }
+
+    /**
+     * Resolves a filter's column in the schema and estimates the fraction of rows
+     * the filter keeps.
+     *
+     * @param survivingPartitions partitions left after pruning
+     * @param schema              the table's schema
+     * @param filter              one filter on this table
+     * @return selectivity in {@code [0, 1]}
+     * @throws IllegalArgumentException if the filter column is not in the schema,
+     *                                  or a numeric range filter has a non-numeric
+     *                                  constant
+     */
+    private static double selectivityOf(List<Partition> survivingPartitions, List<ColumnSpec> schema,
+            Predicate filter) {
+        ColumnSpec column = findColumn(schema, filter.columnName());
+        return filterSelectivity(survivingPartitions, column, filter.comparison(), filter.constant());
     }
 
     /**
@@ -117,7 +132,7 @@ public final class CardinalityEstimator {
      *                                  filter has a non-numeric constant
      */
     public static double filterSelectivity(List<Partition> survivingPartitions, ColumnSpec column,
-            Comparison comparison, Object constant) {
+                                           Comparison comparison, Object constant) {
         requireNonNull(survivingPartitions, "survivingPartitions");
         requireNonNull(column, "column");
         requireNonNull(comparison, "comparison");
@@ -181,7 +196,7 @@ public final class CardinalityEstimator {
      *                                  constant
      */
     private static double rangeSelectivity(List<Partition> survivingPartitions, ColumnSpec column,
-            Comparison comparison, Object constant) {
+                                           Comparison comparison, Object constant) {
         long totalRows = baseTableRows(survivingPartitions);
         if (totalRows == 0) {
             return 0.0;
@@ -207,7 +222,7 @@ public final class CardinalityEstimator {
      *                                  constant
      */
     private static double partitionRangeFraction(Partition partition, ColumnSpec column, Comparison comparison,
-            Object constant) {
+                                                 Object constant) {
         Statistics statistics = partition.statistics().get(column.name());
         if (column.type() == ColumnType.STRING || statistics == null) {
             return SELINGER_RANGE_SELECTIVITY;
