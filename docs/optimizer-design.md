@@ -1,10 +1,10 @@
 # Optimizer Design
 ## **Statistics**: 
-We will add NDV (number of distinct values per partition, per column) to the statistics, which will be collected during COPY like min/max.
+We will add NDV (Number of Distinct Values) per partition, per column to the statistics, which will be collected during COPY like min/max.
 
 
 ## **Where they live and how they merge**: 
-The NDVs will be summed per partition, and caps at the total row count. This is exact when partitions don't share values. Otherwise, it gives an upper bound. We accept that in exchange for simplicity.
+The table NDV is the sum of the partition NDVs. This is exact when partitions don't share values. Otherwise, it gives an upper bound. We accept that in exchange for simplicity. Because a partition never has more distinct values than rows, the sum is never larger than the table's row count; the helper (`NdvMerger.tableNdv`) still caps it at the row count as a safety check.
 
 ## **Roll forward**: 
 
@@ -14,19 +14,30 @@ The NDVs will be summed per partition, and caps at the total row count. This is 
 
 ## **The estimator:** 
 
-The estimator will use the following formulars for operators:
-| Operator                      | Estimate                                                | Assumption                                  |
-| ----------------------------- | ------------------------------------------------------- | ------------------------------------------- |
-| Scan                          | Sum of the rows of the partitions that survive pruning  | None: the only exact number                 |
-| Equality filter `col = x`     | $\frac{\lvert R \rvert}{\mathrm{ndv}(col)}$             | Uniformity: every value is equally frequent |
-| Range filter `col<x`, `col>c` | $\frac{\lvert R \rvert}{3}$ or interpolate from min/max | Uniformity                                  |
+The estimator (`optimizer/CardinalityEstimator`) will use the following formulas for operators:
+| Operator                        | Estimate                                                                                                                                                 | Assumption                                                             |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Scan                            | Sum of the rows of the partitions that survive pruning                                                                                                   | None: the only exact number                                            |
+| Equality filter `col = x`       | $\frac{\lvert R \rvert}{\mathrm{ndv}(col)}$                                                                                                              | Uniformity: every value is equally frequent                            |
+| Range filter `col<x`, `col>x`   | $\sum_p \lvert p \rvert \cdot \frac{x - \min_p}{\max_p - \min_p}$ (for `>`: $\frac{\max_p - x}{\max_p - \min_p}$), clamped to $[0, 1]$ per partition $p$ | Uniformity between min and max                                         |
+| Range filter, no usable min/max | $\frac{\lvert R \rvert}{3}$                                                                                                                              | None: the statistics cannot answer                                     |
+| Several filters on one table    | $\lvert R \rvert \cdot \prod_i \mathrm{sel}_i$                                                                                                           | Independence of the filtered columns                                   |
+| Equi-join `R.a = S.b`           | $\frac{\lvert R \rvert \cdot \lvert S \rvert}{\max(\mathrm{ndv}(R.a),\ \mathrm{ndv}(S.b))}$                                                              | Containment: the smaller key set's values all appear in the larger one |
 
-- $\mathrm{ndv}(col)$ is the number of distinct values of column $col$ of the whole table, approximated by the sum of partition NDVs (upper bound)
-- $\lvert R \rvert$ = cardinality of $R$ = number of rows of the table $R$
-- Selectivity: the fraction of rows a predicate keeps. Equality: $\frac{1}{\mathrm{ndv}(col)}$
-- The $\frac{1}{3}$ is Selinger et al., 1979: System R's "magic constant" when the statistics cannot answer. Still in use: PostgreSQL's default for an inequality is $0.3333$
-
-Source: Lecture 11
+- $\lvert R \rvert$ = cardinality of $R$ = number of rows of $R$ **after pruning**: the sum of the row counts of the surviving partitions.
+- $\mathrm{ndv}(col)$ is the number of distinct values of column $col$, merged with the sum rule over the **same surviving partitions** as $\lvert R \rvert$.
+- Selectivity: the fraction of rows a predicate keeps. Equality: $\frac{1}{\mathrm{ndv}(col)}$.
+- **Range filters** interpolate per surviving partition, using that partition's own min/max, and weight the result by its row count. `STRING` columns cannot be interpolated, and partitions without statistics have no min/max; both fall back to $\frac{1}{3}$.
+  - $\frac{1}{3}$ is System R's "magic constant" when the statistics cannot answer [1].
+- **Independence** of several filters on one table is also System R's assumption [1]. Correlated columns make the product too small.
+- **Equi-join**: the formula is from Lecture 10 [2]. Its selectivity $\frac{1}{\max(\mathrm{ndv})}$ is System R's rule for `col1 = col2` [1]. If both inputs are empty, both NDVs are 0 and the estimate is 0.
+- **Intermediate results**: later joins in a chain need the NDV of a column of an intermediate result. We approximate it by the NDV of the base table that contributed the column, over that table's surviving partitions. 
+- Estimates are kept as `double` through a chain of joins and rounded only when logged, so rounding each step does not add up.
 
 ## **The heuristic**: 
 We will use Greedy smallest-intermediate-first. With at most four tables, exhaustive enumeration is also cheap.
+
+### Literature
+[1] P. G. Selinger, M. M. Astrahan, D. D. Chamberlin, R. A. Lorie, and T. G. Price, "Access path selection in a relational database management system," in Proceedings of the 1979 ACM SIGMOD International Conference on Management of Data, Boston, MA, USA, May 1979, pp. 23–34, doi: 10.1145/582095.582099.
+
+[2] Lecture 10 slides, "Joins: Algorithms and Multi-Way Plans", How to Build Data Systems, Fall 2026.
