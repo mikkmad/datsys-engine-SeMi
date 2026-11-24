@@ -1,7 +1,9 @@
 # Optimizer Design
 ## **Statistics**: 
-We will add NDV (Number of Distinct Values) per partition, per column to the statistics, which will be collected during COPY like min/max.
 
+**NDVs**: We will add NDV (Number of Distinct Values) per partition, per column to the statistics, which will be collected during COPY like min/max.
+
+**1 Billion Rows**: At 1 billion rows, we would switch to a HyperLogLog sketch per column, which merges exactly and uses a fixed amount of memory.
 
 ## **Where they live and how they merge**: 
 The table NDV is the sum of the partition NDVs. This is exact when partitions don't share values. Otherwise, it gives an upper bound. We accept that in exchange for simplicity. Because a partition never has more distinct values than rows, the sum is never larger than the table's row count; the helper (`NdvMerger.tableNdv`) still caps it at the row count as a safety check.
