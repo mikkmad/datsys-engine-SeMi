@@ -23,9 +23,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>
  * Keys are compared with {@code equals}; the binder guarantees both key
- * columns have the same type. {@code close()} logs the build, probe and output
- * row counts: {@code rowsOut} is the intermediate result size that join
- * ordering optimizes. Not thread-safe, like every operator.
+ * columns have the same type. {@code close()} logs one line per join with the
+ * planner's {@link JoinEstimate} next to the build, probe and output row
+ * counts: {@code estRows} against {@code rowsOut} is the estimate error of the
+ * intermediate result that join ordering optimizes. Not thread-safe, like
+ * every operator.
  */
 public final class HashJoinOperator implements Operator {
 
@@ -37,6 +39,9 @@ public final class HashJoinOperator implements Operator {
     private final Operator probe;
     private final int buildKey;
     private final int probeKey;
+
+    // --- Plan-Time Estimate ---
+    private final JoinEstimate estimate;
 
     // --- Hash Table ---
     private Map<Object, List<Object[]>> buildRowsByKey = Map.of();
@@ -61,12 +66,17 @@ public final class HashJoinOperator implements Operator {
      *                 negative
      * @param probeKey zero-based index of the join key in probe rows; must not be
      *                 negative
-     * @throws IllegalArgumentException if a child is null or a key index is
-     *                                  negative
+     * @param estimate the planner's estimate for this join, logged on
+     *                 {@code close()}
+     * @throws IllegalArgumentException if a child or the estimate is null, or a
+     *                                  key index is negative
      */
-    public HashJoinOperator(Operator build, Operator probe, int buildKey, int probeKey) {
+    public HashJoinOperator(Operator build, Operator probe, int buildKey, int probeKey, JoinEstimate estimate) {
         if (build == null || probe == null) {
             throw new IllegalArgumentException("build and probe operators must not be null");
+        }
+        if (estimate == null) {
+            throw new IllegalArgumentException("join estimate must not be null");
         }
         if (buildKey < 0 || probeKey < 0) {
             throw new IllegalArgumentException("join key indices must not be negative: buildKey=" + buildKey
@@ -77,6 +87,7 @@ public final class HashJoinOperator implements Operator {
         this.probe = probe;
         this.buildKey = buildKey;
         this.probeKey = probeKey;
+        this.estimate = estimate;
     }
 
     /**
@@ -128,8 +139,8 @@ public final class HashJoinOperator implements Operator {
     }
 
     /**
-     * Logs the operator summary, releases the hash table, and closes both
-     * children.
+     * Logs the operator summary with the estimated and actual output rows,
+     * releases the hash table, and closes both children.
      *
      * @throws IllegalStateException if this join has not been opened
      */
@@ -137,8 +148,9 @@ public final class HashJoinOperator implements Operator {
     public void close() {
         requireOpen();
 
-        LOGGER.debug("operator=HashJoin buildKey={} probeKey={} rowsBuild={} rowsProbe={} rowsOut={}",
-                buildKey, probeKey, rowsBuild, rowsProbe, rowsOut);
+        LOGGER.debug("operator=HashJoin join={} tables={} estRows={} buildKey={} probeKey={} rowsBuild={} "
+                + "rowsProbe={} rowsOut={}", estimate.joinNumber(), estimate.describeTables(),
+                estimate.roundedRows(), buildKey, probeKey, rowsBuild, rowsProbe, rowsOut);
 
         buildRowsByKey = Map.of();
         resetCursor();
@@ -274,6 +286,15 @@ public final class HashJoinOperator implements Operator {
      */
     public int probeKey() {
         return probeKey;
+    }
+
+    /**
+     * Returns the planner's estimate for this join.
+     *
+     * @return the join estimate logged on {@code close()}
+     */
+    public JoinEstimate estimate() {
+        return estimate;
     }
 
     /**

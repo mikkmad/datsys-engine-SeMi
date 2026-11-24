@@ -22,6 +22,7 @@ import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.operators.FilterOperator;
 import datasys.semi.operators.HashJoinOperator;
+import datasys.semi.operators.JoinEstimate;
 import datasys.semi.operators.Operator;
 import datasys.semi.operators.ProjectOperator;
 import datasys.semi.operators.ScanOperator;
@@ -52,7 +53,9 @@ import datasys.semi.util.LogSanitizer;
  * depends on the {@link JoinOrderMode}: greedy smallest estimated intermediate
  * result first ({@code OPTIMIZED}, the default), or week 10's
  * {@code FROM}-list order ({@code SYNTAX}). Either way the output columns are
- * in {@code FROM}-list order. Not thread-safe: the per-table scan statistics
+ * in {@code FROM}-list order. The chosen order is logged once per multi-table
+ * statement, and every hash join receives its {@link JoinEstimate} so that it
+ * can log the estimate next to its actual output size. Not thread-safe: the per-table scan statistics
  * of the last plan are kept as mutable state, so each executor owns its
  * planner.
  */
@@ -162,6 +165,7 @@ public final class Planner {
         }
 
         JoinOrder joinOrder = chooseJoinOrder(statement, snapshots, tablePlans, resolver);
+        logJoinOrder(joinOrder, snapshots);
         JoinedPipeline joined = planJoins(joinOrder, tablePlans, snapshots, resolver);
         return planOutputColumns(joined, statement, snapshots, resolver);
     }
@@ -258,8 +262,40 @@ public final class Planner {
     }
 
     /**
+     * Logs the chosen join order of a multi-table statement once, with the mode
+     * and the final join's estimate. A single table has no join order, so its
+     * log stays unchanged.
+     *
+     * @param joinOrder the chosen join order
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order
+     */
+    private void logJoinOrder(JoinOrder joinOrder, List<Catalog> snapshots) {
+        if (joinOrder.steps().isEmpty()) {
+            return;
+        }
+        String joinOrderText = LogSanitizer.joinList(tableNamesInJoinOrder(joinOrder, snapshots));
+        LOGGER.debug("statement=SELECT joinOrder={} mode={} estRows={}", joinOrderText, joinOrderMode.flagValue(),
+                Math.round(joinOrder.steps().getLast().estimatedRows()));
+    }
+
+    /**
+     * Lists the table names in the chosen join order.
+     *
+     * @param joinOrder the chosen join order
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order
+     * @return table names, first table first
+     */
+    private static List<String> tableNamesInJoinOrder(JoinOrder joinOrder, List<Catalog> snapshots) {
+        return joinOrder.tableOrder().stream()
+                .map(tablePosition -> snapshots.get(tablePosition).table())
+                .toList();
+    }
+
+    /**
      * Folds the table pipelines into hash joins in the chosen order, tracking
-     * which table's columns sit where in the joined row.
+     * which table's columns sit where in the joined row. Join {@code n} (one-based)
+     * covers the first {@code n + 1} tables of the join order and carries the
+     * step's estimate.
      *
      * @param joinOrder  the chosen join order
      * @param tablePlans table pipelines in {@code FROM}-list order
@@ -271,9 +307,14 @@ public final class Planner {
             List<Catalog> snapshots, ColumnResolver resolver) {
         Operator root = tablePlans.get(joinOrder.firstTablePosition()).pipeline();
         List<Integer> tableLayout = new ArrayList<>(List.of(joinOrder.firstTablePosition()));
-        for (JoinStep step : joinOrder.steps()) {
+        List<String> tableNames = tableNamesInJoinOrder(joinOrder, snapshots);
+        for (int stepIndex = 0; stepIndex < joinOrder.steps().size(); stepIndex++) {
+            JoinStep step = joinOrder.steps().get(stepIndex);
+            JoinEstimate estimate = new JoinEstimate(stepIndex + 1, tableNames.subList(0, stepIndex + 2),
+                    step.estimatedRows());
             Operator newTablePipeline = tablePlans.get(step.newTablePosition()).pipeline();
-            root = planJoin(root, tableLayout, newTablePipeline, step, snapshots, resolver);
+            root = planJoin(new JoinInputs(root, tableLayout, newTablePipeline), step, estimate, snapshots,
+                    resolver);
             if (step.newTableBuilds()) {
                 tableLayout.addFirst(step.newTablePosition());
             } else {
@@ -288,27 +329,27 @@ public final class Planner {
      * side builds; the output row is always the build columns followed by the
      * probe columns.
      *
-     * @param joinedSoFar      pipeline producing the rows of the tables joined so
-     *                         far
-     * @param tableLayout      {@code FROM}-list positions of the tables in
-     *                         {@code joinedSoFar}'s rows, in column order
-     * @param newTablePipeline pipeline of the new table
-     * @param step             the join step with its predicate and build side
-     * @param snapshots        pinned catalog snapshots, for table widths
-     * @param resolver         column resolver over the {@code FROM}-list schemas
+     * @param inputs    the tables joined so far, their column layout, and the
+     *                  new table's pipeline
+     * @param step      the join step with its predicate and build side
+     * @param estimate  the step's estimate, logged by the join on close
+     * @param snapshots pinned catalog snapshots, for table widths
+     * @param resolver  column resolver over the {@code FROM}-list schemas
      * @return hash join of the two pipelines
      */
-    private static Operator planJoin(Operator joinedSoFar, List<Integer> tableLayout, Operator newTablePipeline,
-            JoinStep step, List<Catalog> snapshots, ColumnResolver resolver) {
+    private static Operator planJoin(JoinInputs inputs, JoinStep step, JoinEstimate estimate,
+            List<Catalog> snapshots, ColumnResolver resolver) {
         int newTable = step.newTablePosition();
         ResolvedColumn joinedColumn = resolver.resolve(step.edge().otherSideOf(newTable).columnName());
         ResolvedColumn newTableColumn = resolver.resolve(step.edge().sideOf(newTable).columnName());
-        int joinedKey = columnOffset(tableLayout, joinedColumn.tablePosition(), snapshots)
+        int joinedKey = columnOffset(inputs.tableLayout(), joinedColumn.tablePosition(), snapshots)
                 + joinedColumn.columnIndexInTable();
         int newTableKey = newTableColumn.columnIndexInTable();
         return step.newTableBuilds()
-                ? new HashJoinOperator(newTablePipeline, joinedSoFar, newTableKey, joinedKey)
-                : new HashJoinOperator(joinedSoFar, newTablePipeline, joinedKey, newTableKey);
+                ? new HashJoinOperator(inputs.newTablePipeline(), inputs.joinedSoFar(), newTableKey, joinedKey,
+                        estimate)
+                : new HashJoinOperator(inputs.joinedSoFar(), inputs.newTablePipeline(), joinedKey, newTableKey,
+                        estimate);
     }
 
     /**
@@ -612,5 +653,17 @@ public final class Planner {
      *                    order of the joined row
      */
     private record JoinedPipeline(Operator root, List<Integer> tableLayout) {
+    }
+
+    /**
+     * The two inputs of the next join while the joins are folded.
+     *
+     * @param joinedSoFar      pipeline producing the rows of the tables joined so
+     *                         far
+     * @param tableLayout      {@code FROM}-list positions of the tables in
+     *                         {@code joinedSoFar}'s rows, in column order
+     * @param newTablePipeline pipeline of the new table
+     */
+    private record JoinInputs(Operator joinedSoFar, List<Integer> tableLayout, Operator newTablePipeline) {
     }
 }
