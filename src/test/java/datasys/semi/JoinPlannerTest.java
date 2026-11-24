@@ -72,7 +72,7 @@ class JoinPlannerTest {
     private static final String COPENHAGEN_ONLY = "SELECT * FROM orders, customers, products "
             + "WHERE o_custname = c_name AND o_prodname = p_name AND c_city = 'Copenhagen';";
 
-    // --- Log Format (Exercise 1 §3) ---
+    // --- Log Format (following conventions from Exercise 1 §3) ---
     private static final int LOG_FIELD_COUNT = 7;
     private static final int STATEMENT_NUMBER_FIELD = 2;
     private static final int MESSAGE_FIELD = 6;
