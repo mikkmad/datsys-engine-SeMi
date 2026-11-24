@@ -2,6 +2,8 @@ package datasys.semi.operators;
 
 import java.util.List;
 
+import datasys.semi.util.LogSanitizer;
+
 /**
  * The plan-time description of one hash join: its position in the plan, the
  * tables its output covers, and the estimated number of output rows.
@@ -18,9 +20,6 @@ import java.util.List;
  * @param estimatedRows estimated output rows, finite and non-negative
  */
 public record JoinEstimate(int joinNumber, List<String> tableNames, double estimatedRows) {
-
-    // --- Constants ---
-    private static final String LOG_TABLE_SEPARATOR = "+";
 
     /**
      * Validates the estimate and copies the table names.
@@ -50,7 +49,7 @@ public record JoinEstimate(int joinNumber, List<String> tableNames, double estim
      * @return table names in join order separated by {@code +}
      */
     public String describeTables() {
-        return String.join(LOG_TABLE_SEPARATOR, tableNames);
+        return LogSanitizer.joinList(tableNames);
     }
 
     /**

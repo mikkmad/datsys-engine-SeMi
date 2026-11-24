@@ -7,6 +7,8 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import datasys.semi.util.LogSanitizer;
+
 /**
  * Chooses the left-deep join order of a multi-table {@code SELECT} from
  * estimated table sizes and join-column NDVs.
@@ -42,7 +44,6 @@ public final class JoinOrderer {
 
     // --- Constants ---
     private static final Logger LOGGER = LoggerFactory.getLogger(JoinOrderer.class);
-    private static final String LOG_TABLE_SEPARATOR = "+";
 
     /**
      * Prevents instantiation of this utility class.
@@ -352,7 +353,9 @@ public final class JoinOrderer {
      * @return table names in join order separated by {@code +}
      */
     private static String describeJoinedTables(List<TableEstimate> tables, List<Integer> joined, int newTable) {
-        return describeTables(tables, joined) + LOG_TABLE_SEPARATOR + tables.get(newTable).tableName();
+        List<Integer> positions = new ArrayList<>(joined);
+        positions.add(newTable);
+        return describeTables(tables, positions);
     }
 
     /**
@@ -363,9 +366,9 @@ public final class JoinOrderer {
      * @return table names separated by {@code +}
      */
     private static String describeTables(List<TableEstimate> tables, List<Integer> positions) {
-        return positions.stream()
+        return LogSanitizer.joinList(positions.stream()
                 .map(position -> tables.get(position).tableName())
-                .collect(Collectors.joining(LOG_TABLE_SEPARATOR));
+                .toList());
     }
 
     /**

@@ -65,7 +65,6 @@ public final class Planner {
     private static final Logger LOGGER = LoggerFactory.getLogger(Planner.class);
     private static final String DEFAULT_STATEMENT_NUMBER = "0";
     private static final ScanStats EMPTY_SCAN_STATS = new ScanStats(0, 0, 0, 0);
-    private static final String LOG_TABLE_SEPARATOR = "+";
 
     // --- Collaborators ---
     private final StorageEngine engine;
@@ -274,7 +273,7 @@ public final class Planner {
         if (joinOrder.steps().isEmpty()) {
             return;
         }
-        String joinOrderText = String.join(LOG_TABLE_SEPARATOR, tableNamesInJoinOrder(joinOrder, snapshots));
+        String joinOrderText = LogSanitizer.joinList(tableNamesInJoinOrder(joinOrder, snapshots));
         LOGGER.debug("statement=SELECT joinOrder={} mode={} estRows={}", joinOrderText, joinOrderMode.flagValue(),
                 Math.round(joinOrder.steps().getLast().estimatedRows()));
     }
