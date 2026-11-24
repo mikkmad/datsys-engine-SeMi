@@ -27,6 +27,7 @@ import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.operators.FilterOperator;
 import datasys.semi.operators.HashJoinOperator;
+import datasys.semi.operators.JoinEstimate;
 import datasys.semi.operators.Operator;
 import datasys.semi.operators.ProjectOperator;
 import datasys.semi.operators.ScanOperator;
@@ -50,6 +51,12 @@ import datasys.semi.schema.ColumnType;
  * to {@code -j syntax}.
  *
  * <p>
+ * Exercise 11 §5: every planned join carries its estimate, and every executed
+ * join leaves one log line with {@code estRows} and {@code rowsOut}, next to
+ * one {@code joinOrder} line per statement, all attributable through
+ * {@code statementNumber}.
+ *
+ * <p>
  * The engine stores at most two rows per partition, so orders and customers
  * span two partitions each and pruning on o_orderkey is observable.
  */
@@ -64,6 +71,11 @@ class JoinPlannerTest {
             + "WHERE o_custname = c_name AND o_prodname = p_name AND c_city = ct_city;";
     private static final String COPENHAGEN_ONLY = "SELECT * FROM orders, customers, products "
             + "WHERE o_custname = c_name AND o_prodname = p_name AND c_city = 'Copenhagen';";
+
+    // --- Log Format (Exercise 1 §3) ---
+    private static final int LOG_FIELD_COUNT = 7;
+    private static final int STATEMENT_NUMBER_FIELD = 2;
+    private static final int MESSAGE_FIELD = 6;
 
     // --- Front End ---
     private final SqlParser parser = new SqlParser();
@@ -270,8 +282,10 @@ class JoinPlannerTest {
         List<String> sessionLines = Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8)
                 .stream().filter(line -> line.contains("," + session + ",")).toList();
         assertEquals(List.of(
-                "operator=HashJoin buildKey=1 probeKey=0 rowsBuild=4 rowsProbe=3 rowsOut=4",
-                "operator=HashJoin buildKey=2 probeKey=0 rowsBuild=4 rowsProbe=2 rowsOut=4"),
+                "operator=HashJoin join=1 tables=orders+customers estRows=3 buildKey=1 probeKey=0 rowsBuild=4"
+                        + " rowsProbe=3 rowsOut=4",
+                "operator=HashJoin join=2 tables=orders+customers+products estRows=2 buildKey=2 probeKey=0"
+                        + " rowsBuild=4 rowsProbe=2 rowsOut=4"),
                 sessionLines.stream().filter(line -> line.contains("operator=HashJoin"))
                         .map(line -> line.substring(line.indexOf("operator=HashJoin"))).sorted().toList());
         assertEquals(List.of("customers", "orders", "products"),
@@ -338,6 +352,120 @@ class JoinPlannerTest {
                 () -> plan("SELECT * FROM orders, customers;", optimizedPlanner));
         assertEquals("no join predicate connects the FROM tables (orders+customers); "
                 + "cross products are not supported", crossProduct.getMessage());
+    }
+
+    /**
+     * Exercise 11 §5: the planner hands every join the orderer's estimate,
+     * unrounded, with its one-based number and the tables it covers in join
+     * order. Under {@code -j syntax} the four-table chain is estimated at
+     * 4·3/4 = 3, then 3·2/4 = 1.5, then 1.5·2/3 = 1 rows (sum-rule NDVs over
+     * two-row partitions: o_custname 4, c_name 3, o_prodname 4, p_name 2,
+     * c_city 3, ct_city 2).
+     */
+    @Test
+    void plannedJoinsCarryTheOrdererEstimates() {
+        HashJoinOperator citiesJoin = assertInstanceOf(HashJoinOperator.class, plan(FOUR_TABLES));
+        HashJoinOperator productsJoin = assertInstanceOf(HashJoinOperator.class, citiesJoin.build());
+        HashJoinOperator customersJoin = assertInstanceOf(HashJoinOperator.class, productsJoin.build());
+
+        assertEquals(new JoinEstimate(1, List.of("orders", "customers"), 3.0), customersJoin.estimate());
+        assertEquals(new JoinEstimate(2, List.of("orders", "customers", "products"), 1.5),
+                productsJoin.estimate());
+        assertEquals(new JoinEstimate(3, List.of("orders", "customers", "products", "cities"), 1.0),
+                citiesJoin.estimate());
+    }
+
+    /**
+     * Exercise 11 §5 and Required Test 6 (log part), under {@code -j optimized}:
+     * a script of a three-table, a four-table and a single-table SELECT. Each
+     * joined statement logs its join order once and one line per executed join
+     * with estimate and actual output, all under its own statementNumber; the
+     * single-table statement logs neither. The greedy order starts with
+     * products ⋈ orders (4·2/4 = 2, the first of two predicates estimated at 2).
+     *
+     * @throws IOException if the log file cannot be read
+     */
+    @Test
+    void optimizedJoinsLogEstimateAndActualPerStatement() throws IOException {
+        List<String[]> logLines = executeScriptAndReadLog(
+                ORDERS_CUSTOMERS_PRODUCTS + FOUR_TABLES + "SELECT * FROM orders;", JoinOrderMode.OPTIMIZED);
+
+        assertEquals(List.of(
+                "statement=SELECT joinOrder=products+orders+customers mode=optimized estRows=2",
+                "join=1 tables=products+orders estRows=2 rowsOut=4",
+                "join=2 tables=products+orders+customers estRows=2 rowsOut=4"), joinLog(logLines, "1"));
+        assertEquals(List.of(
+                "statement=SELECT joinOrder=products+orders+customers+cities mode=optimized estRows=1",
+                "join=1 tables=products+orders estRows=2 rowsOut=4",
+                "join=2 tables=products+orders+customers estRows=2 rowsOut=4",
+                "join=3 tables=products+orders+customers+cities estRows=1 rowsOut=4"), joinLog(logLines, "2"));
+        assertEquals(List.of(), joinLog(logLines, "3"));
+    }
+
+    /**
+     * Exercise 11 §5 and Required Test 6 (log part), under {@code -j syntax}:
+     * the same lines, in {@code FROM}-list order and with the syntax plan's
+     * estimates, so week 12 can compare both modes from the log.
+     *
+     * @throws IOException if the log file cannot be read
+     */
+    @Test
+    void syntaxJoinsLogEstimateAndActualPerStatement() throws IOException {
+        List<String[]> logLines = executeScriptAndReadLog(FOUR_TABLES, JoinOrderMode.SYNTAX);
+
+        assertEquals(List.of(
+                "statement=SELECT joinOrder=orders+customers+products+cities mode=syntax estRows=1",
+                "join=1 tables=orders+customers estRows=3 rowsOut=4",
+                "join=2 tables=orders+customers+products estRows=2 rowsOut=4",
+                "join=3 tables=orders+customers+products+cities estRows=1 rowsOut=4"), joinLog(logLines, "1"));
+    }
+
+    /**
+     * Executes a SQL script through an Executor in the given mode under a fresh
+     * session and returns that session's log lines.
+     *
+     * @param sql           one or more SELECT statements
+     * @param joinOrderMode join order mode of the executor
+     * @return the session's log lines split into the seven CSV fields
+     * @throws IOException if the log file cannot be read
+     */
+    private List<String[]> executeScriptAndReadLog(String sql, JoinOrderMode joinOrderMode) throws IOException {
+        String session = UUID.randomUUID().toString();
+        MDC.put("sessionId", session);
+        try {
+            executeSorted(sql, joinOrderMode);
+        } finally {
+            MDC.remove("sessionId");
+        }
+        return Files.readAllLines(Path.of("logs", "engine.log"), StandardCharsets.UTF_8).stream()
+                .filter(line -> line.contains("," + session + ","))
+                .map(line -> line.split(",", LOG_FIELD_COUNT))
+                .toList();
+    }
+
+    /**
+     * Extracts a statement's join order line and, per executed join, the join
+     * number, tables, estimate and actual output, in join number order.
+     *
+     * @param logLines        a session's log lines split into CSV fields
+     * @param statementNumber the statement whose lines are wanted
+     * @return the join order message followed by one summary per join
+     */
+    private static List<String> joinLog(List<String[]> logLines, String statementNumber) {
+        List<String> messages = logLines.stream()
+                .filter(fields -> fields[STATEMENT_NUMBER_FIELD].equals(statementNumber))
+                .map(fields -> fields[MESSAGE_FIELD])
+                .toList();
+        List<String> joinLog = new ArrayList<>(messages.stream()
+                .filter(message -> message.startsWith("statement=SELECT joinOrder="))
+                .toList());
+        joinLog.addAll(messages.stream()
+                .filter(message -> message.startsWith("operator=HashJoin "))
+                .map(message -> message.replaceAll(
+                        "operator=HashJoin (join=\\d+ tables=\\S+ estRows=\\d+) .* (rowsOut=\\d+)", "$1 $2"))
+                .sorted()
+                .toList());
+        return joinLog;
     }
 
     /**
