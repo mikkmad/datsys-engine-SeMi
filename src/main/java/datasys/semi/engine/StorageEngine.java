@@ -30,8 +30,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
@@ -132,6 +135,7 @@ public final class StorageEngine {
      *                                  {@code maxRowsPerPartition} is non-positive
      * @throws IllegalStateException    if the storage directories or catalogs
      *                                  cannot be opened
+     * @see #rollForwardMissingNdvs()
      */
     public StorageEngine(Path dataDirectory, int maxRowsPerPartition) {
         if (dataDirectory == null || maxRowsPerPartition <= 0) {
@@ -155,6 +159,7 @@ public final class StorageEngine {
                     LogSanitizer.sanitize(exception.getMessage()));
             throw new IllegalStateException("Could not open storage directory " + dataDirectory, exception);
         }
+        rollForwardMissingNdvs();
     }
 
     /**
@@ -530,6 +535,23 @@ public final class StorageEngine {
         return new MinMax(min, max);
     }
 
+    /**
+     * Counts the exact number of distinct values (NDV) in a list of column values
+     * with a hash set. Exact counting is sufficient at course scale; see
+     * {@code docs/optimizer-design.md} for the sketch used at a billion rows.
+     *
+     * @param values non-empty list of non-null column values
+     * @return number of distinct values, between 1 and {@code values.size()}
+     * @throws IllegalArgumentException if {@code values} is null or empty
+     */
+    public long distinctCount(List<Object> values) {
+        if (values == null || values.isEmpty()) {
+            throw new IllegalArgumentException("values must not be empty");
+        }
+
+        return new HashSet<>(values).size();
+    }
+
     // --- Internal Storage & Partition Management ---
 
     /**
@@ -551,6 +573,102 @@ public final class StorageEngine {
             LOGGER.debug("table={} version={} retainedVersions={} loaded", latest.table(), latest.version(),
                     retained.size());
         }
+    }
+
+    /**
+     * Rolls missing NDVs forward at startup (design document, "Roll forward"):
+     * every partition of a table's current version that was written before NDV
+     * was collected is read once, its exact NDVs are counted, and the table's next
+     * version is committed with them filled in.
+     *
+     * <p>
+     * This runs in the constructor, after the catalogs are loaded and before any
+     * statement can pin a snapshot, so the commit can never conflict with a
+     * {@code COPY} or {@code DELETE} of this engine. Tables without missing NDVs
+     * are not touched and no partition is read for them. The roll forward is best
+     * effort: a failure is logged and the engine still opens, and the affected
+     * partitions keep the {@code rowCount} fallback until the next startup.
+     */
+    private void rollForwardMissingNdvs() {
+        for (String tableName : List.copyOf(catalogs.keySet())) {
+            rollForwardTable(catalogs.get(tableName));
+        }
+    }
+
+    /**
+     * Fills the missing NDVs of one table's current version and commits the next
+     * version, or does nothing when no NDV is missing.
+     *
+     * @param current the table's current catalog, loaded at startup
+     */
+    private void rollForwardTable(Catalog current) {
+        List<Partition> filled = IntStream.range(0, current.partitions().size())
+                .mapToObj(partitionNumber -> fillMissingNdvs(current, partitionNumber))
+                .toList();
+        if (filled.equals(current.partitions())) {
+            return;
+        }
+        try {
+            Catalog next = current.withPartitions(filled);
+            commitCatalog(current, next);
+            LOGGER.debug("api=rollForwardNdvs table={} version={} committed=true", current.table(), next.version());
+        } catch (IllegalStateException exception) {
+            LOGGER.error("api=rollForwardNdvs table={} skipped=true reason={}",
+                    current.table(), LogSanitizer.sanitize(exception.getMessage()));
+        }
+    }
+
+    /**
+     * Returns one partition with its missing NDVs counted from its rows. A
+     * partition without missing NDVs is returned unchanged and is not read. A
+     * partition that cannot be read is also returned unchanged, so it keeps the
+     * {@code rowCount} fallback.
+     *
+     * @param catalog         catalog owning the partition
+     * @param partitionNumber zero-based index in {@code catalog.partitions()}
+     * @return the partition with every missing NDV filled in, or unchanged
+     */
+    private Partition fillMissingNdvs(Catalog catalog, int partitionNumber) {
+        Partition partition = catalog.partitions().get(partitionNumber);
+        if (!partition.hasMissingNdv()) {
+            return partition;
+        }
+        try {
+            List<Object[]> rows = readPartition(catalog, partition);
+            return partition.withRolledForwardNdvs(countMissingNdvs(catalog, partitionNumber, rows));
+        } catch (IllegalStateException exception) {
+            LOGGER.error("api=rollForwardNdvs table={} partition={} skipped=true reason={}", catalog.table(),
+                    LogSanitizer.sanitize(partition.path()), LogSanitizer.sanitize(exception.getMessage()));
+            return partition;
+        }
+    }
+
+    /**
+     * Counts the exact NDV of every column of a partition whose stored NDV is
+     * missing. Each count is logged on its own line, in the same format as during
+     * {@code COPY}.
+     *
+     * @param catalog         catalog owning the partition
+     * @param partitionNumber zero-based index in {@code catalog.partitions()}
+     * @param rows            every row of that partition, in schema column order
+     * @return NDV per column for the columns whose NDV was missing; empty when the
+     *         partition has no rows
+     */
+    private Map<String, Long> countMissingNdvs(Catalog catalog, int partitionNumber, List<Object[]> rows) {
+        if (rows.isEmpty()) {
+            return Map.of();
+        }
+        Partition partition = catalog.partitions().get(partitionNumber);
+        Map<String, Long> ndvByColumn = new HashMap<>();
+        for (int column = 0; column < catalog.schema().size(); column++) {
+            String columnName = catalog.schema().get(column).name();
+            Statistics columnStatistics = partition.statistics().get(columnName);
+            if (columnStatistics != null && columnStatistics.ndv() == null) {
+                long ndv = countColumnNdv(rows, column, catalog.table(), partitionNumber, columnName);
+                ndvByColumn.put(columnName, ndv);
+            }
+        }
+        return ndvByColumn;
     }
 
     /**
@@ -944,7 +1062,7 @@ public final class StorageEngine {
     /**
      * Writes one buffered partition to {@code partition-<uuid>.dat} via a temporary
      * file and an atomic move, records its path in {@code writtenFiles}, and
-     * computes and logs its min/max statistics.
+     * computes and logs its min/max and NDV statistics.
      *
      * @param tableName       table owning the partition
      * @param tableDirectory  directory receiving the partition file
@@ -1110,13 +1228,14 @@ public final class StorageEngine {
     }
 
     /**
-     * Computes per-column min/max statistics for a partition and logs each summary.
+     * Computes per-column min/max and NDV statistics for a partition and logs each
+     * summary.
      *
      * @param rows            non-empty partition rows
      * @param schema          table schema in column order
      * @param tableName       table name for logging
      * @param partitionNumber catalog-wide partition ordinal for logging
-     * @return map from column name to min/max statistics
+     * @return map from column name to min/max/NDV statistics
      */
     private Map<String, Statistics> computeStatistics(List<Object[]> rows, List<Column> schema, String tableName,
             int partitionNumber) {
@@ -1125,20 +1244,56 @@ public final class StorageEngine {
         for (int column = 0; column < schema.size(); column++) {
             int columnIndex = column;
             List<Object> values = rows.stream().map(row -> row[columnIndex]).toList();
-            MinMax columnStatistics = minMax(values);
-
-            Object min = columnStatistics.min();
-            Object max = columnStatistics.max();
             String columnName = schema.get(column).name();
-
-            statistics.put(columnName, new Statistics(String.valueOf(min), String.valueOf(max)));
-
-            LOGGER.debug("table={} partition={} column={} min={} max={}",
-                    tableName, partitionNumber, columnName,
-                    LogSanitizer.sanitize(min), LogSanitizer.sanitize(max));
+            statistics.put(columnName, computeColumnStatistics(values, tableName, partitionNumber, columnName));
         }
 
         return statistics;
+    }
+
+    /**
+     * Computes the min/max and the exact NDV of one column of a partition, logging
+     * the min/max and the NDV on separate lines as each is created.
+     *
+     * @param values          non-empty values of the column, one per row
+     * @param tableName       table name for logging
+     * @param partitionNumber catalog-wide partition ordinal for logging
+     * @param columnName      column name for logging
+     * @return statistics of the column in this partition
+     */
+    private Statistics computeColumnStatistics(List<Object> values, String tableName, int partitionNumber,
+            String columnName) {
+        MinMax minMax = minMax(values);
+        LOGGER.debug("table={} partition={} column={} min={} max={}",
+                tableName, partitionNumber, columnName,
+                LogSanitizer.sanitize(minMax.min()), LogSanitizer.sanitize(minMax.max()));
+
+        long ndv = distinctCount(values);
+        LOGGER.debug("table={} partition={} column={} rows={} ndv={}",
+                tableName, partitionNumber, columnName, values.size(), ndv);
+
+        return new Statistics(String.valueOf(minMax.min()), String.valueOf(minMax.max()), ndv);
+    }
+
+    /**
+     * Counts the exact NDV of one column of a partition that was written without
+     * it, and logs the count in the same format as during {@code COPY}.
+     *
+     * @param rows            non-empty partition rows in schema column order
+     * @param columnIndex     zero-based schema index of the column
+     * @param tableName       table name for logging
+     * @param partitionNumber zero-based partition index for logging
+     * @param columnName      column name for logging
+     * @return number of distinct values of the column, between 1 and
+     *         {@code rows.size()}
+     */
+    private long countColumnNdv(List<Object[]> rows, int columnIndex, String tableName, int partitionNumber,
+            String columnName) {
+        List<Object> values = rows.stream().map(row -> row[columnIndex]).toList();
+        long ndv = distinctCount(values);
+        LOGGER.debug("table={} partition={} column={} rows={} ndv={}",
+                tableName, partitionNumber, columnName, values.size(), ndv);
+        return ndv;
     }
 
     // --- Type Parsing & Serialization Helpers ---
@@ -1442,11 +1597,19 @@ public final class StorageEngine {
     /**
      * Immutable versioned table catalog snapshot.
      *
+     * <p>{@code Catalog} and every record nested in it ({@link Column},
+     * {@link Partition}, {@link Statistics}) ignore unknown JSON fields, so a
+     * catalog written by a newer engine version (for example one that adds a new
+     * column statistic) still loads after a rollback. The unknown fields are
+     * dropped on the next commit. A new record persisted inside the catalog must
+     * carry the same annotation.
+     *
      * @param table      table name
      * @param version    monotonically increasing catalog version (0 at creation)
      * @param schema     ordered column definitions
      * @param partitions ordered immutable partition descriptors
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Catalog(String table, long version, List<Column> schema, List<Partition> partitions) {
 
         /**
@@ -1501,6 +1664,7 @@ public final class StorageEngine {
      * @param name column name
      * @param type column type name matching {@link ColumnType}
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Column(
             @JsonProperty("column_name") String name,
             @JsonProperty("column_type") String type) {
@@ -1513,8 +1677,9 @@ public final class StorageEngine {
      * @param path       relative path to the partition file from
      *                   {@code dataDirectory}
      * @param rowCount   number of rows stored in the partition
-     * @param statistics per-column min/max summaries keyed by column name
+     * @param statistics per-column min/max/NDV summaries keyed by column name
      */
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record Partition(String path, int rowCount, Map<String, Statistics> statistics) {
 
         /**
@@ -1524,16 +1689,93 @@ public final class StorageEngine {
         public Partition {
             statistics = statistics == null ? Map.of() : Map.copyOf(statistics);
         }
+
+        /**
+         * Returns the number of distinct values of one column in this partition. A
+         * partition written before NDV was collected has no stored NDV until the
+         * next engine startup rolls it forward; until then, or if that roll
+         * forward failed, its {@code rowCount} is returned, which is an upper bound because a
+         * partition never has more distinct values than rows.
+         *
+         * @param columnName column whose NDV is requested
+         * @return stored NDV, or {@code rowCount} when the NDV is missing
+         * @throws IllegalArgumentException if the partition has no statistics for
+         *                                  {@code columnName}
+         */
+        public long columnNdv(String columnName) {
+            Statistics columnStatistics = statistics.get(columnName);
+            if (columnStatistics == null) {
+                throw new IllegalArgumentException("no statistics for column " + columnName + " in " + path);
+            }
+            return columnStatistics.ndv() == null ? rowCount : columnStatistics.ndv();
+        }
+
+        /**
+         * Tells whether any column statistic of this partition is missing its NDV,
+         * because the partition was written before NDV was collected.
+         *
+         * @return {@code true} if at least one column has a {@code null} NDV
+         */
+        public boolean hasMissingNdv() {
+            return statistics.values().stream().anyMatch(columnStatistics -> columnStatistics.ndv() == null);
+        }
+
+        /**
+         * Returns this partition with the given NDVs filled in where its stored NDV
+         * is missing. Stored NDVs are kept, and columns without statistics are
+         * ignored. The path, row count and min/max are unchanged.
+         *
+         * @param ndvByColumn counted NDV per column name, each between 1 and
+         *                    {@code rowCount}
+         * @return partition with the missing NDVs filled in; equal to this
+         *         partition when nothing was missing
+         * @throws IllegalArgumentException if {@code ndvByColumn} is null or an NDV
+         *                                  is outside {@code [1, rowCount]}
+         */
+        public Partition withRolledForwardNdvs(Map<String, Long> ndvByColumn) {
+            if (ndvByColumn == null) {
+                throw new IllegalArgumentException("NDVs must not be null");
+            }
+            Map<String, Statistics> filled = new HashMap<>(statistics);
+            ndvByColumn.forEach((columnName, ndv) -> {
+                if (ndv == null || ndv < 1 || ndv > rowCount) {
+                    throw new IllegalArgumentException(
+                            "invalid NDV " + ndv + " for column " + columnName + " in " + path);
+                }
+                filled.computeIfPresent(columnName,
+                        (name, existing) -> existing.ndv() == null ? existing.withNdv(ndv) : existing);
+            });
+            return new Partition(path, rowCount, filled);
+        }
     }
 
     /**
-     * Immutable string-serialized minimum and maximum values for a single column in
-     * a partition.
+     * Immutable statistics for a single column in a partition: string-serialized
+     * minimum and maximum values and the exact number of distinct values.
+     *
+     * <p>{@code ndv} is {@code null} for partitions written before NDV was
+     * collected. A {@code null} NDV is left out of the JSON instead of being
+     * written as {@code "ndv": null}; use {@link Partition#columnNdv(String)} for
+     * the fallback value.
      *
      * @param min minimum value serialized as a string
      * @param max maximum value serialized as a string
+     * @param ndv number of distinct values in the partition, or {@code null} when
+     *            unknown
      */
-    public record Statistics(String min, String max) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record Statistics(String min, String max, Long ndv) {
+
+        /**
+         * Returns these statistics with the NDV replaced, keeping min and max.
+         *
+         * @param distinctValues number of distinct values, positive
+         * @return statistics with the same min/max and the given NDV
+         */
+        public Statistics withNdv(long distinctValues) {
+            return new Statistics(min, max, distinctValues);
+        }
     }
 
     /**

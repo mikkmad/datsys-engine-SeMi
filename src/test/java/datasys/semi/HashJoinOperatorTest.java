@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.MDC;
 
 import datasys.semi.operators.HashJoinOperator;
+import datasys.semi.operators.JoinEstimate;
 import datasys.semi.operators.Operator;
 
 /**
@@ -26,8 +27,15 @@ import datasys.semi.operators.Operator;
  * Covers the cursor-revealing cases (duplicates on both sides multiply, empty
  * build side, empty probe side), dropped unmatched rows, the output row layout,
  * the row counters and the close() summary line.
+ *
+ * <p>
+ * Exercise 11 §5: the close() line carries the planner's estimate next to the
+ * actual counts.
  */
 class HashJoinOperatorTest {
+
+    // --- Fixtures ---
+    private static final JoinEstimate ESTIMATE = new JoinEstimate(1, List.of("build", "probe"), 2.6);
 
     /**
      * Verifies that 2 build rows and 3 probe rows with the same key emit 6
@@ -179,13 +187,14 @@ class HashJoinOperatorTest {
     }
 
     /**
-     * Verifies that close() logs the operator summary with the build, probe and
-     * output row counts.
+     * Verifies that close() logs one summary line with the join number, its
+     * tables, the rounded estimate (2.6 to 3) and the build, probe and output
+     * row counts.
      *
      * @throws IOException if the log file cannot be read
      */
     @Test
-    void closeLogsRowsBuildRowsProbeRowsOut() throws IOException {
+    void closeLogsEstimateNextToRowsBuildRowsProbeRowsOut() throws IOException {
         List<Object[]> buildRows = List.of(
                 new Object[] { "a" }, new Object[] { "a" }, new Object[] { "b" }, new Object[] { "c" });
         List<Object[]> probeRows = List.of(new Object[] { "a" }, new Object[] { "b" }, new Object[] { "z" });
@@ -202,7 +211,8 @@ class HashJoinOperatorTest {
         assertTrue(logLines.stream()
                 .filter(line -> line.contains("," + session + ","))
                 .anyMatch(line -> line.contains(",DEBUG,HashJoinOperator,")
-                        && line.endsWith("operator=HashJoin buildKey=0 probeKey=0 rowsBuild=4 rowsProbe=3 rowsOut=3")),
+                        && line.endsWith("operator=HashJoin join=1 tables=build+probe estRows=3 buildKey=0 probeKey=0"
+                                + " rowsBuild=4 rowsProbe=3 rowsOut=3")),
                 "expected HashJoin summary line for session " + session);
     }
 
@@ -227,10 +237,11 @@ class HashJoinOperatorTest {
     @Test
     void invalidArgumentsAndOutOfRangeKeysThrow() {
         Operator rows = new TestListOperator(List.of());
-        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(null, rows, 0, 0));
-        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(rows, null, 0, 0));
-        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(rows, rows, -1, 0));
-        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(rows, rows, 0, -1));
+        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(null, rows, 0, 0, ESTIMATE));
+        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(rows, null, 0, 0, ESTIMATE));
+        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(rows, rows, -1, 0, ESTIMATE));
+        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(rows, rows, 0, -1, ESTIMATE));
+        assertThrows(IllegalArgumentException.class, () -> new HashJoinOperator(rows, rows, 0, 0, null));
 
         HashJoinOperator wideBuildKey = join(List.<Object[]>of(new Object[] { 1L }), List.of(), 3, 0);
         IllegalStateException buildError = assertThrows(IllegalStateException.class, wideBuildKey::open);
@@ -248,12 +259,33 @@ class HashJoinOperatorTest {
     void accessorsExposeWiring() {
         Operator build = new TestListOperator(List.of());
         Operator probe = new TestListOperator(List.of());
-        HashJoinOperator join = new HashJoinOperator(build, probe, 2, 5);
+        HashJoinOperator join = new HashJoinOperator(build, probe, 2, 5, ESTIMATE);
 
         assertEquals(build, join.build());
         assertEquals(probe, join.probe());
         assertEquals(2, join.buildKey());
         assertEquals(5, join.probeKey());
+        assertEquals(ESTIMATE, join.estimate());
+    }
+
+    /**
+     * Exercise 11 §5: the estimate keeps its exact value, rounds only for the
+     * log, joins table names with {@code +} (the log is CSV), and rejects values
+     * no plan can produce.
+     */
+    @Test
+    void joinEstimateRoundsForTheLogAndRejectsInvalidValues() {
+        JoinEstimate estimate = new JoinEstimate(2, List.of("products", "orders", "customers"), 1.5);
+
+        assertEquals(1.5, estimate.estimatedRows());
+        assertEquals(2, estimate.roundedRows());
+        assertEquals("products+orders+customers", estimate.describeTables());
+        assertThrows(IllegalArgumentException.class, () -> new JoinEstimate(0, List.of("a", "b"), 1));
+        assertThrows(IllegalArgumentException.class, () -> new JoinEstimate(1, List.of("a"), 1));
+        assertThrows(IllegalArgumentException.class, () -> new JoinEstimate(1, null, 1));
+        assertThrows(IllegalArgumentException.class, () -> new JoinEstimate(1, List.of("a", " "), 1));
+        assertThrows(IllegalArgumentException.class, () -> new JoinEstimate(1, List.of("a", "b"), -1));
+        assertThrows(IllegalArgumentException.class, () -> new JoinEstimate(1, List.of("a", "b"), Double.NaN));
     }
 
     /**
@@ -263,12 +295,12 @@ class HashJoinOperatorTest {
      * @param probeRows rows of the probe child
      * @param buildKey  key index in build rows
      * @param probeKey  key index in probe rows
-     * @return the join operator, not yet opened
+     * @return the join operator with the fixture estimate, not yet opened
      */
     private static HashJoinOperator join(List<Object[]> buildRows, List<Object[]> probeRows, int buildKey,
             int probeKey) {
         return new HashJoinOperator(new TestListOperator(buildRows), new TestListOperator(probeRows), buildKey,
-                probeKey);
+                probeKey, ESTIMATE);
     }
 
     /**

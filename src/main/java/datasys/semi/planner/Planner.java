@@ -5,7 +5,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
@@ -18,15 +17,23 @@ import datasys.semi.engine.StorageEngine.Partition;
 import datasys.semi.engine.StorageEngine.Statistics;
 import datasys.semi.models.BoundPredicate;
 import datasys.semi.models.DeleteStatement;
-import datasys.semi.models.JoinPredicate;
 import datasys.semi.models.Predicate;
 import datasys.semi.models.ScanStats;
 import datasys.semi.models.SelectStatement;
 import datasys.semi.operators.FilterOperator;
 import datasys.semi.operators.HashJoinOperator;
+import datasys.semi.operators.JoinEstimate;
 import datasys.semi.operators.Operator;
 import datasys.semi.operators.ProjectOperator;
 import datasys.semi.operators.ScanOperator;
+import datasys.semi.optimizer.CardinalityEstimator;
+import datasys.semi.optimizer.JoinEdge;
+import datasys.semi.optimizer.JoinOrder;
+import datasys.semi.optimizer.JoinOrderMode;
+import datasys.semi.optimizer.JoinOrderer;
+import datasys.semi.optimizer.JoinSide;
+import datasys.semi.optimizer.JoinStep;
+import datasys.semi.optimizer.TableEstimate;
 import datasys.semi.schema.ColumnResolver;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ResolvedColumn;
@@ -41,10 +48,16 @@ import datasys.semi.util.LogSanitizer;
  * Partition pruning occurs here before any data file is opened. For each table
  * with WHERE filters, min/max partition statistics from its pinned snapshot are
  * evaluated, pruning decisions are logged, and surviving partition numbers are
- * passed into that table's scan. Multi-table queries are joined left-deep in
- * {@code FROM}-list order with {@link HashJoinOperator}s; filters stay below
- * the joins. Not thread-safe: the per-table scan statistics of the last plan
- * are kept as mutable state, so each executor owns its planner.
+ * passed into that table's scan. Multi-table queries are joined left-deep with
+ * {@link HashJoinOperator}s; filters stay below the joins. The join order
+ * depends on the {@link JoinOrderMode}: greedy smallest estimated intermediate
+ * result first ({@code OPTIMIZED}, the default), or week 10's
+ * {@code FROM}-list order ({@code SYNTAX}). Either way the output columns are
+ * in {@code FROM}-list order. The chosen order is logged once per multi-table
+ * statement, and every hash join receives its {@link JoinEstimate} so that it
+ * can log the estimate next to its actual output size. Not thread-safe: the per-table scan statistics
+ * of the last plan are kept as mutable state, so each executor owns its
+ * planner.
  */
 public final class Planner {
 
@@ -56,23 +69,41 @@ public final class Planner {
     // --- Collaborators ---
     private final StorageEngine engine;
 
+    // --- Configuration ---
+    private final JoinOrderMode joinOrderMode;
+
     // --- Observable Metrics ---
     private Map<String, ScanStats> lastScanStatsByTable = new LinkedHashMap<>();
 
     /**
-     * Constructs a new Planner backed by the specified storage engine.
+     * Constructs a planner that orders joins greedily
+     * ({@link JoinOrderMode#OPTIMIZED}, the default).
      *
      * @param engine storage engine managing catalogs and data files
      * @throws IllegalArgumentException if {@code engine} is null
      */
     public Planner(StorageEngine engine) {
-        if (engine == null) {
-            throw new IllegalArgumentException("engine must not be null");
+        this(engine, JoinOrderMode.OPTIMIZED);
+    }
+
+    /**
+     * Constructs a planner with an explicit join order mode.
+     *
+     * @param engine        storage engine managing catalogs and data files
+     * @param joinOrderMode {@link JoinOrderMode#OPTIMIZED} for greedy ordering,
+     *                      {@link JoinOrderMode#SYNTAX} for week 10's
+     *                      {@code FROM}-list order
+     * @throws IllegalArgumentException if an argument is null
+     */
+    public Planner(StorageEngine engine, JoinOrderMode joinOrderMode) {
+        if (engine == null || joinOrderMode == null) {
+            throw new IllegalArgumentException("engine and joinOrderMode must not be null");
         }
         if (MDC.get("statementNumber") == null) {
             MDC.put("statementNumber", DEFAULT_STATEMENT_NUMBER);
         }
         this.engine = engine;
+        this.joinOrderMode = joinOrderMode;
     }
 
     /**
@@ -95,15 +126,16 @@ public final class Planner {
 
     /**
      * Creates an operator execution plan for a {@code SELECT} statement over one
-     * or more tables, joined left-deep in {@code FROM}-list order.
+     * or more tables, joined left-deep in the order chosen by the join order
+     * mode.
      *
      * <p>
      * Each table gets its own pipeline: a scan of the partitions that survive
-     * pruning, under one filter per WHERE filter on that table's columns. The
-     * pipelines are then folded left to right: each new table probes a hash table
-     * built from the tables joined so far, through the one join predicate that
-     * connects it to them. Output rows are the table schemas concatenated in
-     * {@code FROM}-list order, optionally projected onto a column list.
+     * pruning, under one filter per WHERE filter on that table's columns, plus
+     * an estimate of its size. {@link JoinOrderer} orders the joins from these
+     * estimates, and the pipelines are folded into hash joins in that order.
+     * Output rows are always the table schemas concatenated in {@code FROM}-list
+     * order, optionally projected onto a column list, whatever the join order.
      *
      * @param statement the bound select statement to plan
      * @param snapshots pinned catalog snapshots in {@code FROM}-list order, one
@@ -111,9 +143,9 @@ public final class Planner {
      * @return root operator of the planned pipeline
      * @throws IllegalArgumentException if an argument is null, the snapshots do
      *                                  not match the {@code FROM} list, a column
-     *                                  is unknown, a table is not connected to the
-     *                                  tables before it, or a table is connected
-     *                                  by more than one join predicate
+     *                                  is unknown, the tables cannot be joined
+     *                                  without a cross product, or a table is
+     *                                  connected by more than one join predicate
      */
     public Operator plan(SelectStatement statement, List<Catalog> snapshots) {
         if (statement == null || snapshots == null) {
@@ -127,16 +159,15 @@ public final class Planner {
         lastScanStatsByTable = new LinkedHashMap<>();
         List<List<Predicate>> filtersByTable = assignFiltersToTables(statement.filters(), resolver,
                 snapshots.size());
-        Operator root = planTablePipeline(snapshots.getFirst(), filtersByTable.getFirst());
-        for (int tablePosition = 1; tablePosition < snapshots.size(); tablePosition++) {
-            Operator probe = planTablePipeline(snapshots.get(tablePosition), filtersByTable.get(tablePosition));
-            root = planJoin(root, probe, tablePosition, statement, resolver);
+        List<TablePlan> tablePlans = new ArrayList<>(snapshots.size());
+        for (int tablePosition = 0; tablePosition < snapshots.size(); tablePosition++) {
+            tablePlans.add(planTable(snapshots.get(tablePosition), filtersByTable.get(tablePosition)));
         }
 
-        if (statement.columns().isPresent()) {
-            root = planProjection(root, statement.columns().get(), resolver);
-        }
-        return root;
+        JoinOrder joinOrder = chooseJoinOrder(statement, snapshots, tablePlans, resolver);
+        logJoinOrder(joinOrder, snapshots);
+        JoinedPipeline joined = planJoins(joinOrder, tablePlans, snapshots, resolver);
+        return planOutputColumns(joined, statement, snapshots, resolver);
     }
 
     /**
@@ -184,126 +215,222 @@ public final class Planner {
     }
 
     /**
-     * Builds one table's pipeline: a scan over the partitions that survive
-     * pruning, with the table's filters stacked above it.
+     * Turns the join predicates into join graph edges and orders them according
+     * to the join order mode.
      *
-     * @param snapshot pinned catalog snapshot of the table
-     * @param filters  filters on this table's columns; may be empty
-     * @return the table pipeline
-     * @throws IllegalArgumentException if a filter column is unknown
+     * @param statement  the select statement, for its join predicates
+     * @param snapshots  pinned catalog snapshots in {@code FROM}-list order
+     * @param tablePlans table pipelines with estimates, in {@code FROM}-list order
+     * @param resolver   column resolver over the {@code FROM}-list schemas
+     * @return the join order to build
+     * @throws IllegalArgumentException if the tables cannot be joined without a
+     *                                  cross product, or a table is connected by
+     *                                  more than one join predicate
      */
-    private Operator planTablePipeline(Catalog snapshot, List<Predicate> filters) {
-        return filters.isEmpty()
-                ? planWithoutPredicate(snapshot)
-                : planWithPredicates(snapshot, snapshot.columnSpecs(), filters);
-    }
-
-    /**
-     * Joins the next table's pipeline onto the tables joined so far: the
-     * intermediate result is the build side and the new table probes.
-     *
-     * @param joinedSoFar   pipeline producing the concatenated rows of tables
-     *                      {@code 0..tablePosition-1}
-     * @param probe         pipeline of the new table
-     * @param tablePosition {@code FROM}-list position of the new table
-     * @param statement     the select statement, for its join predicates and
-     *                      table names
-     * @param resolver      column resolver over the {@code FROM}-list schemas
-     * @return hash join of the two pipelines
-     * @throws IllegalArgumentException if no join predicate, or more than one,
-     *                                  connects the new table to the earlier ones
-     */
-    private static Operator planJoin(Operator joinedSoFar, Operator probe, int tablePosition,
-            SelectStatement statement, ColumnResolver resolver) {
-        JoinPredicate connecting = findConnectingJoin(statement, tablePosition, resolver);
-        ResolvedColumn left = resolver.resolve(connecting.leftColumn());
-        ResolvedColumn right = resolver.resolve(connecting.rightColumn());
-        boolean leftIsNewTable = left.tablePosition() == tablePosition;
-        ResolvedColumn newTableSide = leftIsNewTable ? left : right;
-        ResolvedColumn joinedSide = leftIsNewTable ? right : left;
-        return new HashJoinOperator(joinedSoFar, probe, joinedSide.joinedIndex(),
-                newTableSide.columnIndexInTable());
-    }
-
-    /**
-     * Finds the join predicate that connects a table to the tables listed before
-     * it. A predicate connects table {@code i} exactly when the later of its two
-     * tables is {@code i}, so every predicate belongs to exactly one fold step.
-     *
-     * <p>
-     * Simplification: only one connecting predicate per table is supported; a
-     * second one is rejected rather than applied as a filter on the join output.
-     *
-     * @param statement     the select statement
-     * @param tablePosition {@code FROM}-list position of the new table
-     * @param resolver      column resolver over the {@code FROM}-list schemas
-     * @return the single connecting join predicate
-     * @throws IllegalArgumentException if no predicate or more than one predicate
-     *                                  connects the table
-     */
-    private static JoinPredicate findConnectingJoin(SelectStatement statement, int tablePosition,
+    private JoinOrder chooseJoinOrder(SelectStatement statement, List<Catalog> snapshots, List<TablePlan> tablePlans,
             ColumnResolver resolver) {
-        List<JoinPredicate> connecting = statement.joins().stream()
-                .filter(join -> laterTablePosition(join, resolver) == tablePosition)
+        List<TableEstimate> tableEstimates = new ArrayList<>(snapshots.size());
+        for (int tablePosition = 0; tablePosition < snapshots.size(); tablePosition++) {
+            tableEstimates.add(new TableEstimate(snapshots.get(tablePosition).table(),
+                    tablePlans.get(tablePosition).estimatedRows()));
+        }
+        List<JoinEdge> edges = statement.joins().stream()
+                .map(join -> new JoinEdge(toJoinSide(join.leftColumn(), tablePlans, resolver),
+                        toJoinSide(join.rightColumn(), tablePlans, resolver)))
                 .toList();
-        String tableName = statement.tableNames().get(tablePosition);
-        if (connecting.isEmpty()) {
-            String earlierTables = String.join(", ", statement.tableNames().subList(0, tablePosition));
-            throw new IllegalArgumentException("table " + tableName
-                    + " is not connected by a join predicate to the tables before it (" + earlierTables
-                    + "); reorder the FROM list so that each table joins a table listed before it");
-        }
-        if (connecting.size() > 1) {
-            throw new IllegalArgumentException("table " + tableName + " is connected by "
-                    + connecting.size() + " join predicates (" + describeJoins(connecting)
-                    + "); only one join predicate per table is supported");
-        }
-        return connecting.getFirst();
+        return switch (joinOrderMode) {
+            case SYNTAX -> JoinOrderer.orderBySyntax(tableEstimates, edges);
+            case OPTIMIZED -> JoinOrderer.orderGreedily(tableEstimates, edges);
+        };
     }
 
     /**
-     * Returns the {@code FROM}-list position of the later of a join's two tables.
+     * Resolves one side of a join predicate and estimates its column's NDV over
+     * the owning table's surviving partitions.
      *
-     * @param join     the join predicate
-     * @param resolver column resolver over the {@code FROM}-list schemas
-     * @return the larger of the two table positions
-     * @throws IllegalArgumentException if a join column is unknown or ambiguous
+     * @param columnName join column as written in the query
+     * @param tablePlans table pipelines with their surviving partitions
+     * @param resolver   column resolver over the {@code FROM}-list schemas
+     * @return the join side
+     * @throws IllegalArgumentException if the column is unknown or ambiguous
      */
-    private static int laterTablePosition(JoinPredicate join, ColumnResolver resolver) {
-        return Math.max(resolver.resolve(join.leftColumn()).tablePosition(),
-                resolver.resolve(join.rightColumn()).tablePosition());
+    private static JoinSide toJoinSide(String columnName, List<TablePlan> tablePlans, ColumnResolver resolver) {
+        ResolvedColumn column = resolver.resolve(columnName);
+        List<Partition> survivingPartitions = tablePlans.get(column.tablePosition()).survivingPartitions();
+        long ndv = CardinalityEstimator.columnNdv(survivingPartitions, column.column().name());
+        return new JoinSide(column.tablePosition(), columnName, ndv);
     }
 
     /**
-     * Formats join predicates for an error message.
+     * Logs the chosen join order of a multi-table statement once, with the mode
+     * and the final join's estimate. A single table has no join order, so its
+     * log stays unchanged.
      *
-     * @param joins join predicates
-     * @return predicates as {@code a = b} separated by {@code " and "}
+     * @param joinOrder the chosen join order
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order
      */
-    private static String describeJoins(List<JoinPredicate> joins) {
-        return joins.stream()
-                .map(join -> join.leftColumn() + " = " + join.rightColumn())
-                .collect(Collectors.joining(" and "));
+    private void logJoinOrder(JoinOrder joinOrder, List<Catalog> snapshots) {
+        if (joinOrder.steps().isEmpty()) {
+            return;
+        }
+        String joinOrderText = LogSanitizer.joinList(tableNamesInJoinOrder(joinOrder, snapshots));
+        LOGGER.debug("statement=SELECT joinOrder={} mode={} estRows={}", joinOrderText, joinOrderMode.flagValue(),
+                Math.round(joinOrder.steps().getLast().estimatedRows()));
     }
 
     /**
-     * Wraps a pipeline in a projection onto the named columns of the joined row.
+     * Lists the table names in the chosen join order.
      *
-     * @param child                pipeline producing joined rows
-     * @param projectedColumnNames columns to keep, in output order
-     * @param resolver             column resolver over the {@code FROM}-list
-     *                             schemas
-     * @return project operator over {@code child}
+     * @param joinOrder the chosen join order
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order
+     * @return table names, first table first
+     */
+    private static List<String> tableNamesInJoinOrder(JoinOrder joinOrder, List<Catalog> snapshots) {
+        return joinOrder.tableOrder().stream()
+                .map(tablePosition -> snapshots.get(tablePosition).table())
+                .toList();
+    }
+
+    /**
+     * Folds the table pipelines into hash joins in the chosen order, tracking
+     * which table's columns sit where in the joined row. Join {@code n} (one-based)
+     * covers the first {@code n + 1} tables of the join order and carries the
+     * step's estimate.
+     *
+     * @param joinOrder  the chosen join order
+     * @param tablePlans table pipelines in {@code FROM}-list order
+     * @param snapshots  pinned catalog snapshots in {@code FROM}-list order
+     * @param resolver   column resolver over the {@code FROM}-list schemas
+     * @return the root join, or the only table's pipeline, with its column layout
+     */
+    private static JoinedPipeline planJoins(JoinOrder joinOrder, List<TablePlan> tablePlans,
+            List<Catalog> snapshots, ColumnResolver resolver) {
+        Operator root = tablePlans.get(joinOrder.firstTablePosition()).pipeline();
+        List<Integer> tableLayout = new ArrayList<>(List.of(joinOrder.firstTablePosition()));
+        List<String> tableNames = tableNamesInJoinOrder(joinOrder, snapshots);
+        for (int stepIndex = 0; stepIndex < joinOrder.steps().size(); stepIndex++) {
+            JoinStep step = joinOrder.steps().get(stepIndex);
+            JoinEstimate estimate = new JoinEstimate(stepIndex + 1, tableNames.subList(0, stepIndex + 2),
+                    step.estimatedRows());
+            Operator newTablePipeline = tablePlans.get(step.newTablePosition()).pipeline();
+            root = planJoin(new JoinInputs(root, tableLayout, newTablePipeline), step, estimate, snapshots,
+                    resolver);
+            if (step.newTableBuilds()) {
+                tableLayout.addFirst(step.newTablePosition());
+            } else {
+                tableLayout.addLast(step.newTablePosition());
+            }
+        }
+        return new JoinedPipeline(root, List.copyOf(tableLayout));
+    }
+
+    /**
+     * Joins one new table onto the tables joined so far. The step decides which
+     * side builds; the output row is always the build columns followed by the
+     * probe columns.
+     *
+     * @param inputs    the tables joined so far, their column layout, and the
+     *                  new table's pipeline
+     * @param step      the join step with its predicate and build side
+     * @param estimate  the step's estimate, logged by the join on close
+     * @param snapshots pinned catalog snapshots, for table widths
+     * @param resolver  column resolver over the {@code FROM}-list schemas
+     * @return hash join of the two pipelines
+     */
+    private static Operator planJoin(JoinInputs inputs, JoinStep step, JoinEstimate estimate,
+            List<Catalog> snapshots, ColumnResolver resolver) {
+        int newTable = step.newTablePosition();
+        ResolvedColumn joinedColumn = resolver.resolve(step.edge().otherSideOf(newTable).columnName());
+        ResolvedColumn newTableColumn = resolver.resolve(step.edge().sideOf(newTable).columnName());
+        int joinedKey = columnOffset(inputs.tableLayout(), joinedColumn.tablePosition(), snapshots)
+                + joinedColumn.columnIndexInTable();
+        int newTableKey = newTableColumn.columnIndexInTable();
+        return step.newTableBuilds()
+                ? new HashJoinOperator(inputs.newTablePipeline(), inputs.joinedSoFar(), newTableKey, joinedKey,
+                        estimate)
+                : new HashJoinOperator(inputs.joinedSoFar(), inputs.newTablePipeline(), joinedKey, newTableKey,
+                        estimate);
+    }
+
+    /**
+     * Returns where a table's first column sits in a joined row.
+     *
+     * @param tableLayout   {@code FROM}-list positions of the joined tables, in
+     *                      column order
+     * @param tablePosition {@code FROM}-list position of a table in the layout
+     * @param snapshots     pinned catalog snapshots, for table widths
+     * @return the sum of the widths of the tables before it in the layout
+     */
+    private static int columnOffset(List<Integer> tableLayout, int tablePosition, List<Catalog> snapshots) {
+        int offset = 0;
+        for (int layoutTable : tableLayout) {
+            if (layoutTable == tablePosition) {
+                return offset;
+            }
+            offset += snapshots.get(layoutTable).columnSpecs().size();
+        }
+        throw new IllegalStateException("table position " + tablePosition + " is not in the joined row");
+    }
+
+    /**
+     * Restores the {@code FROM}-list column order: projects onto the column list
+     * if there is one, otherwise permutes the joined row back to {@code FROM}
+     * order. A plan whose layout already is in {@code FROM} order gets no extra
+     * operator, so {@code -j syntax} plans match week 10 exactly.
+     *
+     * @param joined    the joined pipeline with its column layout
+     * @param statement the select statement, for its column list
+     * @param snapshots pinned catalog snapshots in {@code FROM}-list order
+     * @param resolver  column resolver over the {@code FROM}-list schemas
+     * @return the plan's root operator
      * @throws IllegalArgumentException if a projected column is unknown or
      *                                  ambiguous
      */
-    private static Operator planProjection(Operator child, List<String> projectedColumnNames,
-            ColumnResolver resolver) {
-        int[] columnIndices = new int[projectedColumnNames.size()];
-        for (int index = 0; index < projectedColumnNames.size(); index++) {
-            columnIndices[index] = resolver.resolve(projectedColumnNames.get(index)).joinedIndex();
+    private static Operator planOutputColumns(JoinedPipeline joined, SelectStatement statement,
+            List<Catalog> snapshots, ColumnResolver resolver) {
+        if (statement.columns().isPresent()) {
+            List<Integer> projected = statement.columns().get().stream()
+                    .map(resolver::resolve)
+                    .map(column -> columnOffset(joined.tableLayout(), column.tablePosition(), snapshots)
+                            + column.columnIndexInTable())
+                    .toList();
+            return new ProjectOperator(joined.root(), toIntArray(projected));
         }
-        return new ProjectOperator(child, columnIndices);
+        List<Integer> fromListOrder = fromListColumnOrder(joined.tableLayout(), snapshots);
+        boolean alreadyInFromOrder = IntStream.range(0, fromListOrder.size())
+                .allMatch(index -> fromListOrder.get(index) == index);
+        return alreadyInFromOrder ? joined.root() : new ProjectOperator(joined.root(), toIntArray(fromListOrder));
+    }
+
+    /**
+     * Lists, for every output column in {@code FROM}-list order, its index in the
+     * joined row.
+     *
+     * @param tableLayout {@code FROM}-list positions of the joined tables, in
+     *                    column order
+     * @param snapshots   pinned catalog snapshots in {@code FROM}-list order
+     * @return joined-row indices of all columns in {@code FROM}-list order
+     */
+    private static List<Integer> fromListColumnOrder(List<Integer> tableLayout, List<Catalog> snapshots) {
+        List<Integer> joinedRowIndices = new ArrayList<>();
+        for (int tablePosition = 0; tablePosition < snapshots.size(); tablePosition++) {
+            int offset = columnOffset(tableLayout, tablePosition, snapshots);
+            int width = snapshots.get(tablePosition).columnSpecs().size();
+            for (int columnIndex = 0; columnIndex < width; columnIndex++) {
+                joinedRowIndices.add(offset + columnIndex);
+            }
+        }
+        return joinedRowIndices;
+    }
+
+    /**
+     * Converts column indices to the array {@link ProjectOperator} expects.
+     *
+     * @param columnIndices column indices in output order
+     * @return the same indices as an {@code int[]}
+     */
+    private static int[] toIntArray(List<Integer> columnIndices) {
+        return columnIndices.stream().mapToInt(Integer::intValue).toArray();
     }
 
     /**
@@ -385,50 +512,50 @@ public final class Planner {
     }
 
     /**
-     * Builds a bare scan plan when no predicate is present.
+     * Builds one table's pipeline, a scan over the partitions that survive
+     * pruning with the table's filters stacked above it in WHERE order, and
+     * estimates its output size from the same surviving partitions.
+     *
+     * @param snapshot pinned catalog snapshot of the table
+     * @param filters  filters on this table's columns; may be empty
+     * @return the table pipeline with its surviving partitions and estimate
+     * @throws IllegalArgumentException if a filter column is unknown
+     */
+    private TablePlan planTable(Catalog snapshot, List<Predicate> filters) {
+        List<Integer> survivingNumbers = filters.isEmpty()
+                ? readAllPartitions(snapshot)
+                : intersectSurvivingPartitions(snapshot, filters);
+        int totalPartitions = snapshot.partitions().size();
+        lastScanStatsByTable.put(snapshot.table(), new ScanStats(totalPartitions, survivingNumbers.size(),
+                totalPartitions - survivingNumbers.size(), snapshot.version()));
+
+        Operator root = new ScanOperator(engine, snapshot, survivingNumbers);
+        for (Predicate filter : filters) {
+            BoundPredicate boundPredicate = new BoundPredicate(resolveColumnIndex(snapshot.columnSpecs(),
+                    filter.columnName()), filter.comparison(), filter.constant());
+            root = new FilterOperator(root, boundPredicate);
+        }
+        List<Partition> survivingPartitions = survivingNumbers.stream().map(snapshot.partitions()::get).toList();
+        double estimatedRows = CardinalityEstimator.filteredTableRows(survivingPartitions, snapshot.columnSpecs(),
+                filters);
+        return new TablePlan(root, survivingPartitions, estimatedRows);
+    }
+
+    /**
+     * Selects every partition of a table without a filter, logging each read
+     * decision.
      *
      * @param snapshot pinned catalog snapshot of the table being scanned
-     * @return scan operator reading all partitions in the snapshot
+     * @return all partition numbers in ascending order
      */
-    private Operator planWithoutPredicate(Catalog snapshot) {
+    private static List<Integer> readAllPartitions(Catalog snapshot) {
         int totalPartitions = snapshot.partitions().size();
         List<Integer> allPartitions = new ArrayList<>(totalPartitions);
         for (int index = 0; index < totalPartitions; index++) {
             allPartitions.add(index);
             LOGGER.debug("table={} partition={} decision=READ reason=noPredicate", snapshot.table(), index);
         }
-
-        lastScanStatsByTable.put(snapshot.table(),
-                new ScanStats(totalPartitions, totalPartitions, 0, snapshot.version()));
-        return new ScanOperator(engine, snapshot, allPartitions);
-    }
-
-    /**
-     * Builds a filter-over-scan plan evaluating partition summaries for pruning.
-     * A partition is read only if every filter may match it; one
-     * {@link FilterOperator} per filter is stacked above the scan, in WHERE
-     * order.
-     *
-     * @param snapshot pinned catalog snapshot of the table being scanned
-     * @param schema   table schema from the snapshot
-     * @param filters  non-empty list of filter predicates on this table
-     * @return filter operators wrapping a scan operator
-     * @throws IllegalArgumentException if a filter column is unknown
-     */
-    private Operator planWithPredicates(Catalog snapshot, List<ColumnSpec> schema, List<Predicate> filters) {
-        List<Integer> survivingPartitions = intersectSurvivingPartitions(snapshot, filters);
-        int totalPartitions = snapshot.partitions().size();
-        int readCount = survivingPartitions.size();
-        lastScanStatsByTable.put(snapshot.table(),
-                new ScanStats(totalPartitions, readCount, totalPartitions - readCount, snapshot.version()));
-
-        Operator root = new ScanOperator(engine, snapshot, survivingPartitions);
-        for (Predicate filter : filters) {
-            BoundPredicate boundPredicate = new BoundPredicate(
-                    resolveColumnIndex(schema, filter.columnName()), filter.comparison(), filter.constant());
-            root = new FilterOperator(root, boundPredicate);
-        }
-        return root;
+        return allPartitions;
     }
 
     /**
@@ -506,5 +633,37 @@ public final class Planner {
             }
         }
         throw new IllegalArgumentException("unknown column: " + columnName);
+    }
+
+    /**
+     * One table's planned pipeline with the inputs the join orderer needs.
+     *
+     * @param pipeline            scan with the table's filters above it
+     * @param survivingPartitions partitions left after pruning, for NDVs
+     * @param estimatedRows       estimated rows after pruning and filters
+     */
+    private record TablePlan(Operator pipeline, List<Partition> survivingPartitions, double estimatedRows) {
+    }
+
+    /**
+     * The joined pipeline and the order of the tables' columns in its rows.
+     *
+     * @param root        root operator of the joins
+     * @param tableLayout {@code FROM}-list positions of the tables, in column
+     *                    order of the joined row
+     */
+    private record JoinedPipeline(Operator root, List<Integer> tableLayout) {
+    }
+
+    /**
+     * The two inputs of the next join while the joins are folded.
+     *
+     * @param joinedSoFar      pipeline producing the rows of the tables joined so
+     *                         far
+     * @param tableLayout      {@code FROM}-list positions of the tables in
+     *                         {@code joinedSoFar}'s rows, in column order
+     * @param newTablePipeline pipeline of the new table
+     */
+    private record JoinInputs(Operator joinedSoFar, List<Integer> tableLayout, Operator newTablePipeline) {
     }
 }

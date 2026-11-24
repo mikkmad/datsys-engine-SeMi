@@ -23,6 +23,7 @@ import datasys.semi.models.Statement;
 import datasys.semi.operators.Operator;
 import datasys.semi.parser.Binder;
 import datasys.semi.parser.SqlParser;
+import datasys.semi.optimizer.JoinOrderMode;
 import datasys.semi.planner.DeletePlan;
 import datasys.semi.planner.Planner;
 import datasys.semi.util.LogSanitizer;
@@ -73,18 +74,36 @@ public final class Executor {
      * @throws IllegalArgumentException if {@code engine} or {@code output} is null
      */
     public Executor(StorageEngine engine, PrintStream output) {
+        this(engine, output, JoinOrderMode.OPTIMIZED);
+    }
+
+    /**
+     * Constructs an Executor writing SELECT CSV output to a designated stream and
+     * ordering joins with the given mode.
+     *
+     * @param engine        storage engine backing tables and catalogs
+     * @param output        target print stream for query results
+     * @param joinOrderMode {@link JoinOrderMode#OPTIMIZED} for greedy join
+     *                      ordering, {@link JoinOrderMode#SYNTAX} for week 10's
+     *                      {@code FROM}-list order
+     * @throws IllegalArgumentException if an argument is null
+     */
+    public Executor(StorageEngine engine, PrintStream output, JoinOrderMode joinOrderMode) {
         if (engine == null) {
             throw new IllegalArgumentException("engine must not be null");
         }
         if (output == null) {
             throw new IllegalArgumentException("output must not be null");
         }
+        if (joinOrderMode == null) {
+            throw new IllegalArgumentException("joinOrderMode must not be null");
+        }
 
         this.engine = engine;
         this.output = output;
         this.parser = new SqlParser();
         this.binder = new Binder(engine);
-        this.planner = new Planner(engine);
+        this.planner = new Planner(engine, joinOrderMode);
     }
 
     /**
@@ -260,7 +279,7 @@ public final class Executor {
 
     /**
      * Binds a {@code SELECT} against its pinned snapshots and plans it; joins of
-     * several tables are planned left-deep in {@code FROM}-list order.
+     * several tables are planned left-deep in the planner's join order mode.
      *
      * @param statement SELECT statement
      * @param snapshots pinned catalog snapshots in {@code FROM}-list order
