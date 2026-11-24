@@ -10,7 +10,7 @@ The table NDV is the sum of the partition NDVs. This is exact when partitions do
 
 **Rolling back** (downgrading), the NDV field will be treated as an unknown JSON property, and `Jackson` will throw `UnrecognizedPropertyException`, which the StorageEngine will log as an `IllegalStateException` error. By adding `@JsonIgnoreProperties(ignoreUnknown = true)` to the `Catalog`, `Partition`, `Column` and the `Statistics` class, we can ignore the missing property and continue to use the table, and avoid the `IllegalStateException` error. This is a retrofit upgrade to the code, which would make downgrading safe, but the NDV statistic would be lost.
 
-**Rolling forward** (upgrading), the NDV statistic should be calculated on the first scan if it is missing. That way we ensure that all tables will have the statistic after it have been used once.
+**Rolling forward** (upgrading), the NDV statistic is calculated on engine start if it is missing. Every partition without an NDV is read once, and the NDVs are committed as a new catalog version, so all tables have the statistic before the first query is planned. We do this at startup rather than on the first scan because no statement holds a snapshot yet, so the commit cannot make a concurrent COPY or DELETE fail, and because the first plan would otherwise still use the fallback. The cost is a slower first startup after the upgrade; later startups read nothing. If a partition cannot be read, the estimator uses its row count as an upper bound until the next startup.
 
 ## **The estimator:** 
 

@@ -256,8 +256,10 @@ public final class CardinalityEstimator {
 
     /**
      * Returns one partition's NDV for a column, or its row count when the NDV or
-     * the column's statistics are missing (an upper bound, see the design
-     * document's roll-forward section).
+     * the column's statistics are missing. The row count is an upper bound. The
+     * engine fills a missing NDV in at startup (design document, "Roll
+     * forward"), so this fallback is only reached when that roll forward failed
+     * for the partition.
      *
      * @param partition  the partition
      * @param columnName the column
