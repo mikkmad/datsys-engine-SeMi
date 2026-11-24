@@ -55,11 +55,13 @@ class JoinTestbedIT {
             CREATE TABLE cities (ct_city STRING, ct_country STRING, ct_population LONG);
             """;
 
-    // --- Engine Log (following conventions from Exercise 1 §3) ---
+    // --- Log File Layout (following conventions from Exercise 1 §3) ---
     private static final Path ENGINE_LOG = Path.of("logs", "engine.log");
     private static final int LOG_FIELD_COUNT = 7;
     private static final int STATEMENT_NUMBER_FIELD = 2;
     private static final int MESSAGE_FIELD = 6;
+
+    // --- Join Log Messages (Exercise 11 §5) ---
     private static final Pattern JOIN_ORDER_LINE =
             Pattern.compile("statement=SELECT joinOrder=(\\S+) mode=(\\S+) estRows=\\d+");
     private static final Pattern JOIN_LINE =
