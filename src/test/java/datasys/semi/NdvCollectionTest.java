@@ -2,7 +2,6 @@ package datasys.semi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -20,11 +20,11 @@ import org.slf4j.MDC;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import datasys.semi.engine.StorageEngine;
 import datasys.semi.engine.StorageEngine.Catalog;
 import datasys.semi.engine.StorageEngine.Partition;
+import datasys.semi.engine.StorageEngine.Statistics;
 import datasys.semi.schema.ColumnSpec;
 import datasys.semi.schema.ColumnType;
 
@@ -154,26 +154,25 @@ class NdvCollectionTest {
     }
 
     /**
-     * Verifies that a partition written before NDV was collected has a null NDV
-     * and falls back to its row count, and that a later commit does not write
-     * {@code "ndv": null} for it.
+     * Verifies that a partition written before NDV was collected falls back to its
+     * row count, and that its JSON leaves the missing NDV out instead of writing
+     * {@code "ndv": null}. The record is built directly because an engine restart
+     * rolls a missing NDV forward (see {@code NdvRollForwardTest}).
      *
-     * @throws IOException if the catalog file cannot be rewritten or read
+     * @throws IOException if the partition cannot be serialized
      */
     @Test
     void partitionWithoutNdvFallsBackToRowCount() throws IOException {
-        copyDuplicates();
-        removeNdvFromCatalog(catalogFile(1));
+        Partition legacy = new Partition("data/legacy.bin", 4,
+                Map.of("city", new Statistics("Aarhus", "Odense", null)));
 
-        StorageEngine restarted = new StorageEngine(directory, MAX_ROWS_PER_PARTITION);
-        Partition legacy = restarted.snapshot(TABLE).partitions().get(0);
-        assertNull(legacy.statistics().get("city").ndv());
+        assertTrue(legacy.hasMissingNdv());
         assertEquals(4L, legacy.columnNdv("city"));
 
-        restarted.copyFile(restarted.snapshot(TABLE), csvFile.toString());
-        JsonNode partitionsJson = objectMapper.readTree(catalogFile(2).toFile()).get("partitions");
-        assertFalse(partitionsJson.get(0).get("statistics").get("city").has("ndv"));
-        assertTrue(partitionsJson.get(2).get("statistics").get("city").has("ndv"));
+        JsonNode partitionJson = objectMapper.readTree(objectMapper.writeValueAsString(legacy));
+        assertFalse(partitionJson.get("statistics").get("city").has("ndv"));
+        assertFalse(partitionJson.has("hasMissingNdv"));
+        assertFalse(partitionJson.has("missingNdv"));
     }
 
     /**
@@ -227,32 +226,5 @@ class NdvCollectionTest {
     private static void assertLogged(List<String> logLines, String message) {
         assertEquals(1, logLines.stream().filter(line -> line.endsWith("," + message)).count(),
                 "expected one log line: " + message);
-    }
-
-    /**
-     * Removes the {@code ndv} field from every column statistic in a catalog
-     * file, as a catalog written before NDV was collected would look.
-     *
-     * @param catalogFile catalog JSON file to rewrite in place
-     * @throws IOException if the file cannot be read or written
-     */
-    private void removeNdvFromCatalog(Path catalogFile) throws IOException {
-        JsonNode catalog = objectMapper.readTree(catalogFile.toFile());
-        for (JsonNode partition : catalog.get("partitions")) {
-            for (JsonNode statistics : partition.get("statistics")) {
-                ((ObjectNode) statistics).remove("ndv");
-            }
-        }
-        objectMapper.writeValue(catalogFile.toFile(), catalog);
-    }
-
-    /**
-     * Resolves the catalog file of one version of the test table.
-     *
-     * @param version catalog version, non-negative
-     * @return path of {@code catalogs/ndvtrips-v<version>.json}
-     */
-    private Path catalogFile(long version) {
-        return directory.resolve("catalogs").resolve("%s-v%d.json".formatted(TABLE, version));
     }
 }
