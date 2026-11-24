@@ -55,7 +55,7 @@ class JoinTestbedIT {
             CREATE TABLE cities (ct_city STRING, ct_country STRING, ct_population LONG);
             """;
 
-    // --- Engine Log (Exercise 1 §3) ---
+    // --- Engine Log (following conventions from Exercise 1 §3) ---
     private static final Path ENGINE_LOG = Path.of("logs", "engine.log");
     private static final int LOG_FIELD_COUNT = 7;
     private static final int STATEMENT_NUMBER_FIELD = 2;
