@@ -27,10 +27,14 @@ All four use `WHERE o_custname = s_custname AND s_custname = c_name AND c_city =
 ```bash
 mvn -DskipTests package                 # builds target/engine.jar
 python3 project3/generate_data.py       # data with the fixed seed
-project3/run_benchmark.sh               # REPS=7 HEAP=4g CITY=city042 by default
-project3/analyze_benchmark.sh           # writes project3/results/analysis/
+MACHINE=mikma project3/run_benchmark.sh      # REPS=7 HEAP=4g CITY=city042 by default
+MACHINE=mikma project3/analyze_benchmark.sh  # writes project3/results/mikma/analysis/
 ```
 
-Results go to `project3/results/`. The report needs `analysis/runtime.svg`, `analysis/results.md`,
-and `conditions.txt`. Warm vs. cold: every run starts a new JVM (cold JIT), and the warm-up
+Results are kept per machine, one folder per group member: `project3/results/mikma/` and
+`project3/results/sebs/`. `MACHINE` is required and picks the folder. Run on your own machine
+with your own name so the two sets of numbers never overwrite each other.
+
+Each machine's report material is `analysis/runtime.svg`, `analysis/results.md`, and
+`conditions.txt`. Warm vs. cold: every run starts a new JVM (cold JIT), and the warm-up
 repetition warms the OS page cache, so the measured runs are "cold JVM, warm page cache".

@@ -15,7 +15,7 @@
 # cache; the summary skips it. Every execution is a new JVM, so the measured
 # runs are "cold JVM, warm OS page cache".
 #
-# Outputs, in RESULTS_DIR (default project3/results):
+# Outputs, in RESULTS_DIR (default project3/results/$MACHINE):
 #   logs/<config>-<rep>.log  the engine log of each execution (one session each)
 #   logs/load.log            the engine log of the CREATE TABLE + COPY session
 #   runs.csv                 r_session,r_config,r_repetition (no header, for COPY)
@@ -24,8 +24,11 @@
 #
 # Prerequisites: python3 project3/generate_data.py   and   mvn -DskipTests package
 #
-# Usage: project3/run_benchmark.sh
-#        REPS=10 HEAP=8g CITY=city007 project3/run_benchmark.sh
+# MACHINE (required) names the results folder, one per group member's machine:
+#   project3/results/mikma, project3/results/sebs
+#
+# Usage: MACHINE=mikma project3/run_benchmark.sh
+#        MACHINE=sebs REPS=10 HEAP=8g CITY=city007 project3/run_benchmark.sh
 set -euo pipefail
 
 PROJECT3="$(cd "$(dirname "$0")" && pwd)"
@@ -35,7 +38,11 @@ REPS="${REPS:-7}"                         # measured repetitions per configurati
 HEAP="${HEAP:-4g}"
 CITY="${CITY:-city042}"
 DATA_CSV_DIR="${DATA_CSV_DIR:-$PROJECT3/data}"
-RESULTS_DIR="${RESULTS_DIR:-$PROJECT3/results}"
+if [ -z "${MACHINE:-}" ]; then
+    echo "set MACHINE to the machine's results folder, e.g. MACHINE=mikma $0" >&2
+    exit 1
+fi
+RESULTS_DIR="${RESULTS_DIR:-$PROJECT3/results/$MACHINE}"
 WORK_DIR="$PROJECT3/work/benchmark"       # engine working dir: the engine writes WORK_DIR/logs/
 ENGINE_DATA_DIR="$PROJECT3/work/benchmark-data"
 LOG_DIR="$RESULTS_DIR/logs"
@@ -174,7 +181,7 @@ main() {
     done
 
     check_results_agree
-    echo "done: logs and runs.csv in $RESULTS_DIR; next: project3/analyze_benchmark.sh"
+    echo "done: logs and runs.csv in $RESULTS_DIR; next: MACHINE=$MACHINE project3/analyze_benchmark.sh"
 }
 
 main "$@"

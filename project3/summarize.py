@@ -36,9 +36,17 @@ def parse_arguments():
     """Parses the command line; defaults match analyze_benchmark.sh."""
     project3 = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--analysis-dir", type=Path, default=project3 / "results" / "analysis")
-    parser.add_argument("--wallclock", type=Path, default=project3 / "results" / "wallclock.csv")
-    return parser.parse_args()
+    parser.add_argument("--machine", help="results folder under project3/results (e.g. mikma, sebs)")
+    parser.add_argument("--analysis-dir", type=Path)
+    parser.add_argument("--wallclock", type=Path)
+    arguments = parser.parse_args()
+    if arguments.analysis_dir is None or arguments.wallclock is None:
+        if arguments.machine is None:
+            parser.error("give --machine, or both --analysis-dir and --wallclock")
+        results_dir = project3 / "results" / arguments.machine
+        arguments.analysis_dir = arguments.analysis_dir or results_dir / "analysis"
+        arguments.wallclock = arguments.wallclock or results_dir / "wallclock.csv"
+    return arguments
 
 
 def parse_message(message):

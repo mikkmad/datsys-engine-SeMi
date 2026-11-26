@@ -14,20 +14,24 @@
 # summarized by summarize.py into the runtime chart and the
 # estimated-vs.-actual table.
 #
-# Outputs, in RESULTS_DIR/analysis (default project3/results/analysis):
+# Outputs, in RESULTS_DIR/analysis (default project3/results/$MACHINE/analysis):
 #   joins.csv       HashJoinOperator lines + run labels   (estRows / rowsOut per join)
 #   statements.csv  Executor lines + run labels           (durationMs per statement)
 #   orderer.csv     JoinOrderer lines + run labels        (the planner's choices per step)
 #   analysis.log    the engine log of the analysis session itself
 #   + everything summarize.py writes
 #
-# Usage: project3/analyze_benchmark.sh      (after project3/run_benchmark.sh)
+# Usage: MACHINE=mikma project3/analyze_benchmark.sh      (after run_benchmark.sh with the same MACHINE)
 set -euo pipefail
 
 PROJECT3="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$PROJECT3/.." && pwd)"
 
-RESULTS_DIR="${RESULTS_DIR:-$PROJECT3/results}"
+if [ -z "${MACHINE:-}" ]; then
+    echo "set MACHINE to the machine's results folder, e.g. MACHINE=mikma $0" >&2
+    exit 1
+fi
+RESULTS_DIR="${RESULTS_DIR:-$PROJECT3/results/$MACHINE}"
 ANALYSIS_DIR="$RESULTS_DIR/analysis"
 WORK_DIR="$PROJECT3/work/analysis"        # engine working dir: the engine writes WORK_DIR/logs/
 ENGINE_DATA_DIR="$PROJECT3/work/analysis-data"
@@ -40,7 +44,7 @@ LABELED_JOIN="FROM logs, runs WHERE sessionId = r_session"
 collect_benchmark_logs() {
     local count
     count="$(find "$RESULTS_DIR/logs" -name '*-*.log' | wc -l)"
-    [ "$count" -gt 0 ] || { echo "no benchmark logs in $RESULTS_DIR/logs; run project3/run_benchmark.sh first" >&2; exit 1; }
+    [ "$count" -gt 0 ] || { echo "no benchmark logs in $RESULTS_DIR/logs; run MACHINE=$MACHINE project3/run_benchmark.sh first" >&2; exit 1; }
     find "$RESULTS_DIR/logs" -name '*-*.log' -print0 | sort -z | xargs -0 cat > "$ALL_LOGS"
     echo "collected $(wc -l < "$ALL_LOGS" | tr -d ' ') log lines from $count benchmark executions"
 }
@@ -70,7 +74,7 @@ label_lines() {
 }
 
 main() {
-    [ -f "$RESULTS_DIR/runs.csv" ] || { echo "missing $RESULTS_DIR/runs.csv; run project3/run_benchmark.sh first" >&2; exit 1; }
+    [ -f "$RESULTS_DIR/runs.csv" ] || { echo "missing $RESULTS_DIR/runs.csv; run MACHINE=$MACHINE project3/run_benchmark.sh first" >&2; exit 1; }
     mkdir -p "$ANALYSIS_DIR" "$WORK_DIR"
 
     collect_benchmark_logs
