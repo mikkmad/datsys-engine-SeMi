@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="440" font-family="sans-serif" font-size="12">
+<rect width="760" height="440" fill="white"/>
+<text x="380.0" y="22" text-anchor="middle" font-size="15">Join-order benchmark: end-to-end runtime per configuration</text>
+<line x1="80" x2="740" y1="350.0" y2="350.0" stroke="#ddd"/>
+<text x="72" y="354.0" text-anchor="end">0</text>
+<line x1="80" x2="740" y1="288.0" y2="288.0" stroke="#ddd"/>
+<text x="72" y="292.0" text-anchor="end">400</text>
+<line x1="80" x2="740" y1="226.0" y2="226.0" stroke="#ddd"/>
+<text x="72" y="230.0" text-anchor="end">800</text>
+<line x1="80" x2="740" y1="164.0" y2="164.0" stroke="#ddd"/>
+<text x="72" y="168.0" text-anchor="end">1,200</text>
+<line x1="80" x2="740" y1="102.0" y2="102.0" stroke="#ddd"/>
+<text x="72" y="106.0" text-anchor="end">1,600</text>
+<line x1="80" x2="740" y1="40.0" y2="40.0" stroke="#ddd"/>
+<text x="72" y="44.0" text-anchor="end">2,000</text>
+<text transform="translate(22 195.0) rotate(-90)" text-anchor="middle">Runtime, durationMs (ms)</text>
+<line x1="162.5" x2="162.5" y1="256.2" y2="254.5" stroke="#2a9d8f" stroke-width="1.5"/>
+<line x1="134.5" x2="190.5" y1="255.4" y2="255.4" stroke="#2a9d8f" stroke-width="4"/>
+<circle cx="192.5" cy="256.2" r="3.5" fill="#2a9d8f" fill-opacity="0.7"/>
+<circle cx="197.5" cy="255.9" r="3.5" fill="#2a9d8f" fill-opacity="0.7"/>
+<circle cx="202.5" cy="255.6" r="3.5" fill="#2a9d8f" fill-opacity="0.7"/>
+<circle cx="207.5" cy="255.4" r="3.5" fill="#2a9d8f" fill-opacity="0.7"/>
+<circle cx="212.5" cy="255.0" r="3.5" fill="#2a9d8f" fill-opacity="0.7"/>
+<circle cx="192.5" cy="254.8" r="3.5" fill="#2a9d8f" fill-opacity="0.7"/>
+<circle cx="197.5" cy="254.5" r="3.5" fill="#2a9d8f" fill-opacity="0.7"/>
+<text x="162.5" y="247.4" text-anchor="middle">610 ms</text>
+<text x="162.5" y="370" text-anchor="middle" font-weight="bold">min</text>
+<text x="162.5" y="386" text-anchor="middle" font-size="10">-j syntax</text>
+<line x1="327.5" x2="327.5" y1="152.7" y2="147.1" stroke="#e76f51" stroke-width="1.5"/>
+<line x1="299.5" x2="355.5" y1="150.2" y2="150.2" stroke="#e76f51" stroke-width="4"/>
+<circle cx="357.5" cy="152.7" r="3.5" fill="#e76f51" fill-opacity="0.7"/>
+<circle cx="362.5" cy="151.1" r="3.5" fill="#e76f51" fill-opacity="0.7"/>
+<circle cx="367.5" cy="150.8" r="3.5" fill="#e76f51" fill-opacity="0.7"/>
+<circle cx="372.5" cy="150.2" r="3.5" fill="#e76f51" fill-opacity="0.7"/>
+<circle cx="377.5" cy="149.9" r="3.5" fill="#e76f51" fill-opacity="0.7"/>
+<circle cx="357.5" cy="148.8" r="3.5" fill="#e76f51" fill-opacity="0.7"/>
+<circle cx="362.5" cy="147.1" r="3.5" fill="#e76f51" fill-opacity="0.7"/>
+<text x="327.5" y="142.2" text-anchor="middle">1,289 ms</text>
+<text x="327.5" y="370" text-anchor="middle" font-weight="bold">max</text>
+<text x="327.5" y="386" text-anchor="middle" font-size="10">-j syntax</text>
+<line x1="492.5" x2="492.5" y1="255.9" y2="254.8" stroke="#457b9d" stroke-width="1.5"/>
+<line x1="464.5" x2="520.5" y1="255.6" y2="255.6" stroke="#457b9d" stroke-width="4"/>
+<circle cx="522.5" cy="255.9" r="3.5" fill="#457b9d" fill-opacity="0.7"/>
+<circle cx="527.5" cy="255.6" r="3.5" fill="#457b9d" fill-opacity="0.7"/>
+<circle cx="532.5" cy="255.6" r="3.5" fill="#457b9d" fill-opacity="0.7"/>
+<circle cx="537.5" cy="255.6" r="3.5" fill="#457b9d" fill-opacity="0.7"/>
+<circle cx="542.5" cy="255.3" r="3.5" fill="#457b9d" fill-opacity="0.7"/>
+<circle cx="522.5" cy="255.1" r="3.5" fill="#457b9d" fill-opacity="0.7"/>
+<circle cx="527.5" cy="254.8" r="3.5" fill="#457b9d" fill-opacity="0.7"/>
+<text x="492.5" y="247.6" text-anchor="middle">609 ms</text>
+<text x="492.5" y="370" text-anchor="middle" font-weight="bold">opt_min_from</text>
+<text x="492.5" y="386" text-anchor="middle" font-size="10">-j optimized</text>
+<line x1="657.5" x2="657.5" y1="254.1" y2="253.1" stroke="#8d6cab" stroke-width="1.5"/>
+<line x1="629.5" x2="685.5" y1="253.7" y2="253.7" stroke="#8d6cab" stroke-width="4"/>
+<circle cx="687.5" cy="254.1" r="3.5" fill="#8d6cab" fill-opacity="0.7"/>
+<circle cx="692.5" cy="254.1" r="3.5" fill="#8d6cab" fill-opacity="0.7"/>
+<circle cx="697.5" cy="253.9" r="3.5" fill="#8d6cab" fill-opacity="0.7"/>
+<circle cx="702.5" cy="253.7" r="3.5" fill="#8d6cab" fill-opacity="0.7"/>
+<circle cx="707.5" cy="253.4" r="3.5" fill="#8d6cab" fill-opacity="0.7"/>
+<circle cx="687.5" cy="253.3" r="3.5" fill="#8d6cab" fill-opacity="0.7"/>
+<circle cx="692.5" cy="253.1" r="3.5" fill="#8d6cab" fill-opacity="0.7"/>
+<text x="657.5" y="245.7" text-anchor="middle">621 ms</text>
+<text x="657.5" y="370" text-anchor="middle" font-weight="bold">opt_max_from</text>
+<text x="657.5" y="386" text-anchor="middle" font-size="10">-j optimized</text>
+<line x1="80" x2="740" y1="350" y2="350" stroke="#333"/>
+<text x="380.0" y="422" text-anchor="middle">Configuration (bar = median, whisker = min-max, dots = individual runs; n = 7 each)</text>
+</svg>

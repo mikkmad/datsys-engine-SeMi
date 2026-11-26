@@ -1,0 +1,9 @@
+config,join,tables,build_rows,probe_rows,est_rows,actual_rows,q_error,stable
+min,1,customers+shipments,10,100000,100,1000,10.0,True
+min,2,customers+shipments+orders,1000,100000,1000,100000,100.0,True
+max,1,orders+shipments,100000,100000,1000000,10000000,10.0,True
+max,2,orders+shipments+customers,10000000,10,1000,100000,100.0,True
+opt_min_from,1,customers+shipments,10,100000,100,1000,10.0,True
+opt_min_from,2,customers+shipments+orders,1000,100000,1000,100000,100.0,True
+opt_max_from,1,customers+shipments,10,100000,100,1000,10.0,True
+opt_max_from,2,customers+shipments+orders,1000,100000,1000,100000,100.0,True

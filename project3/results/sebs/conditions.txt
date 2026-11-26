@@ -1,0 +1,12 @@
+date:        2026-11-26T10:39:08+01:00
+commit:      a390e3911353add1d2d1dbd4a4d24bbe8e178851
+machine:     Darwin 24.6.0 arm64, 8 cores
+cpu:         Apple M1
+memory:      8,0 GiB
+jvm:         java version "25.0.4.1" 2026-08-18 LTS Java(TM) SE Runtime Environment (build 25.0.4.1+1-LTS-5) 
+heap:        -Xmx4g
+data:        customers=1000 orders=100000 shipments=100000 
+filter:      c_city = 'city042'
+configs:     min max opt_min_from opt_max_from
+repetitions: 1 warm-up (repetition 0, discarded) + 7 measured per configuration, interleaved
+conditions:  every execution is a new JVM (cold JIT); the OS page cache is warm after the warm-up

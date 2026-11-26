@@ -1,0 +1,89 @@
+2026-11-26 10:39:55.812,be52390d-3ce6-41e9-b3d6-d615196cfed4,0,3,DEBUG,Engine,engine started
+2026-11-26 10:39:55.858,be52390d-3ce6-41e9-b3d6-d615196cfed4,0,3,DEBUG,SqlParser,statements=4 durationMs=14
+2026-11-26 10:39:55.860,be52390d-3ce6-41e9-b3d6-d615196cfed4,1,3,DEBUG,StorageEngine,api=createTable table=logs
+2026-11-26 10:39:55.888,be52390d-3ce6-41e9-b3d6-d615196cfed4,1,3,DEBUG,StorageEngine,table=logs version=0 columns=7
+2026-11-26 10:39:55.888,be52390d-3ce6-41e9-b3d6-d615196cfed4,1,3,DEBUG,Executor,statement=CREATE_TABLE table=logs version=0 durationMs=29
+2026-11-26 10:39:55.888,be52390d-3ce6-41e9-b3d6-d615196cfed4,2,3,DEBUG,StorageEngine,api=createTable table=runs
+2026-11-26 10:39:55.889,be52390d-3ce6-41e9-b3d6-d615196cfed4,2,3,DEBUG,StorageEngine,table=runs version=0 columns=3
+2026-11-26 10:39:55.889,be52390d-3ce6-41e9-b3d6-d615196cfed4,2,3,DEBUG,Executor,statement=CREATE_TABLE table=runs version=0 durationMs=0
+2026-11-26 10:39:55.892,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,api=copyFile table=logs file=/Users/sebsthiel/Documents/School/ITU/candidate/3_Semester/HTBDS/datsys-engine-SeMi/project3/work/benchmark-logs.csv
+2026-11-26 10:39:55.937,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=timestamp min=2026-11-26 10:39:10.743 max=2026-11-26 10:39:47.453
+2026-11-26 10:39:55.938,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=timestamp rows=1392 ndv=502
+2026-11-26 10:39:55.938,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=sessionId min=08c97f6c-025e-4074-91e8-50873d386de2 max=fb90019b-b7a0-46de-81fd-56236646a08b
+2026-11-26 10:39:55.938,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=sessionId rows=1392 ndv=32
+2026-11-26 10:39:55.939,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=statementNumber min=0 max=1
+2026-11-26 10:39:55.939,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=statementNumber rows=1392 ndv=2
+2026-11-26 10:39:55.939,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=threadId min=3 max=3
+2026-11-26 10:39:55.940,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=threadId rows=1392 ndv=1
+2026-11-26 10:39:55.940,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logLevel min=DEBUG max=DEBUG
+2026-11-26 10:39:55.940,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logLevel rows=1392 ndv=1
+2026-11-26 10:39:55.940,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=className min=Engine max=StorageEngine
+2026-11-26 10:39:55.941,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=className rows=1392 ndv=9
+2026-11-26 10:39:55.941,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logMessage min=engine started max=table=shipments version=1 retainedVersions=2 loaded
+2026-11-26 10:39:55.941,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logMessage rows=1392 ndv=128
+2026-11-26 10:39:55.947,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,StorageEngine,table=logs file=benchmark-logs.csv rows=1392 partitions=1 version=1 durationMs=54
+2026-11-26 10:39:55.947,be52390d-3ce6-41e9-b3d6-d615196cfed4,3,3,DEBUG,Executor,statement=COPY table=logs file=/Users/sebsthiel/Documents/School/ITU/candidate/3_Semester/HTBDS/datsys-engine-SeMi/project3/work/benchmark-logs.csv rows=1392 partitions=1 version=1 durationMs=57
+2026-11-26 10:39:55.951,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,api=copyFile table=runs file=/Users/sebsthiel/Documents/School/ITU/candidate/3_Semester/HTBDS/datsys-engine-SeMi/project3/results/sebs/runs.csv
+2026-11-26 10:39:55.952,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_session min=08c97f6c-025e-4074-91e8-50873d386de2 max=fb90019b-b7a0-46de-81fd-56236646a08b
+2026-11-26 10:39:55.952,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_session rows=32 ndv=32
+2026-11-26 10:39:55.953,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_config min=max max=opt_min_from
+2026-11-26 10:39:55.953,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_config rows=32 ndv=4
+2026-11-26 10:39:55.953,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_repetition min=0 max=7
+2026-11-26 10:39:55.953,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_repetition rows=32 ndv=8
+2026-11-26 10:39:55.953,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,StorageEngine,table=runs file=runs.csv rows=32 partitions=1 version=1 durationMs=2
+2026-11-26 10:39:55.954,be52390d-3ce6-41e9-b3d6-d615196cfed4,4,3,DEBUG,Executor,statement=COPY table=runs file=/Users/sebsthiel/Documents/School/ITU/candidate/3_Semester/HTBDS/datsys-engine-SeMi/project3/results/sebs/runs.csv rows=32 partitions=1 version=1 durationMs=2
+2026-11-26 10:39:55.954,be52390d-3ce6-41e9-b3d6-d615196cfed4,0,3,DEBUG,Engine,engine stopped
+2026-11-26 10:39:56.210,121be5cb-5a5b-45b8-bdd1-2452a451949d,0,3,DEBUG,Engine,engine started
+2026-11-26 10:39:56.284,121be5cb-5a5b-45b8-bdd1-2452a451949d,0,3,DEBUG,StorageEngine,table=logs version=1 retainedVersions=2 loaded
+2026-11-26 10:39:56.285,121be5cb-5a5b-45b8-bdd1-2452a451949d,0,3,DEBUG,StorageEngine,table=runs version=1 retainedVersions=2 loaded
+2026-11-26 10:39:56.303,121be5cb-5a5b-45b8-bdd1-2452a451949d,0,3,DEBUG,SqlParser,statements=1 durationMs=14
+2026-11-26 10:39:56.308,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,Planner,table=logs column=className comparison=EQUALS const=HashJoinOperator partition=0 min=Engine max=StorageEngine decision=READ
+2026-11-26 10:39:56.312,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,Planner,table=runs partition=0 decision=READ reason=noPredicate
+2026-11-26 10:39:56.313,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,JoinOrderer,mode=optimized step=1 candidate=logs+runs on=sessionId=r_session inputRows=155/32 ndv=32/32 estRows=155
+2026-11-26 10:39:56.314,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,JoinOrderer,mode=optimized step=1 chosen=runs+logs estRows=155 build=runs probe=logs
+2026-11-26 10:39:56.314,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,Planner,statement=SELECT joinOrder=runs+logs mode=optimized estRows=155
+2026-11-26 10:39:56.315,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,ScanOperator,operator=Scan table=runs version=1 partitions=1
+2026-11-26 10:39:56.315,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,ScanOperator,operator=Scan table=logs version=1 partitions=1
+2026-11-26 10:39:56.341,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,HashJoinOperator,operator=HashJoin join=1 tables=runs+logs estRows=155 buildKey=0 probeKey=1 rowsBuild=32 rowsProbe=64 rowsOut=64
+2026-11-26 10:39:56.341,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,ScanOperator,operator=Scan table=runs partitionsRead=1 rowsOut=32
+2026-11-26 10:39:56.341,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,FilterOperator,operator=Filter column=5 comparison=EQUALS const=HashJoinOperator rowsIn=1392 rowsOut=64
+2026-11-26 10:39:56.341,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,ScanOperator,operator=Scan table=logs partitionsRead=1 rowsOut=1392
+2026-11-26 10:39:56.342,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,Executor,statement=SELECT table=logs rowsOut=64 partitionsRead=1 partitionsPruned=0 version=1 durationMs=39
+2026-11-26 10:39:56.342,121be5cb-5a5b-45b8-bdd1-2452a451949d,1,3,DEBUG,Executor,statement=SELECT table=runs rowsOut=64 partitionsRead=1 partitionsPruned=0 version=1 durationMs=39
+2026-11-26 10:39:56.346,121be5cb-5a5b-45b8-bdd1-2452a451949d,0,3,DEBUG,Engine,engine stopped
+2026-11-26 10:39:56.606,3efd0201-927a-4418-8014-8c07e3242ecc,0,3,DEBUG,Engine,engine started
+2026-11-26 10:39:56.680,3efd0201-927a-4418-8014-8c07e3242ecc,0,3,DEBUG,StorageEngine,table=logs version=1 retainedVersions=2 loaded
+2026-11-26 10:39:56.681,3efd0201-927a-4418-8014-8c07e3242ecc,0,3,DEBUG,StorageEngine,table=runs version=1 retainedVersions=2 loaded
+2026-11-26 10:39:56.699,3efd0201-927a-4418-8014-8c07e3242ecc,0,3,DEBUG,SqlParser,statements=1 durationMs=14
+2026-11-26 10:39:56.704,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,Planner,table=logs column=className comparison=EQUALS const=Executor partition=0 min=Engine max=StorageEngine decision=READ
+2026-11-26 10:39:56.708,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,Planner,table=runs partition=0 decision=READ reason=noPredicate
+2026-11-26 10:39:56.709,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,JoinOrderer,mode=optimized step=1 candidate=logs+runs on=sessionId=r_session inputRows=155/32 ndv=32/32 estRows=155
+2026-11-26 10:39:56.710,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,JoinOrderer,mode=optimized step=1 chosen=runs+logs estRows=155 build=runs probe=logs
+2026-11-26 10:39:56.710,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,Planner,statement=SELECT joinOrder=runs+logs mode=optimized estRows=155
+2026-11-26 10:39:56.712,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,ScanOperator,operator=Scan table=runs version=1 partitions=1
+2026-11-26 10:39:56.712,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,ScanOperator,operator=Scan table=logs version=1 partitions=1
+2026-11-26 10:39:56.737,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,HashJoinOperator,operator=HashJoin join=1 tables=runs+logs estRows=155 buildKey=0 probeKey=1 rowsBuild=32 rowsProbe=96 rowsOut=96
+2026-11-26 10:39:56.737,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,ScanOperator,operator=Scan table=runs partitionsRead=1 rowsOut=32
+2026-11-26 10:39:56.737,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,FilterOperator,operator=Filter column=5 comparison=EQUALS const=Executor rowsIn=1392 rowsOut=96
+2026-11-26 10:39:56.737,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,ScanOperator,operator=Scan table=logs partitionsRead=1 rowsOut=1392
+2026-11-26 10:39:56.738,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,Executor,statement=SELECT table=logs rowsOut=96 partitionsRead=1 partitionsPruned=0 version=1 durationMs=39
+2026-11-26 10:39:56.738,3efd0201-927a-4418-8014-8c07e3242ecc,1,3,DEBUG,Executor,statement=SELECT table=runs rowsOut=96 partitionsRead=1 partitionsPruned=0 version=1 durationMs=39
+2026-11-26 10:39:56.741,3efd0201-927a-4418-8014-8c07e3242ecc,0,3,DEBUG,Engine,engine stopped
+2026-11-26 10:39:57.002,d3e6bad0-914b-4621-9b1e-569930c33aaf,0,3,DEBUG,Engine,engine started
+2026-11-26 10:39:57.077,d3e6bad0-914b-4621-9b1e-569930c33aaf,0,3,DEBUG,StorageEngine,table=logs version=1 retainedVersions=2 loaded
+2026-11-26 10:39:57.077,d3e6bad0-914b-4621-9b1e-569930c33aaf,0,3,DEBUG,StorageEngine,table=runs version=1 retainedVersions=2 loaded
+2026-11-26 10:39:57.095,d3e6bad0-914b-4621-9b1e-569930c33aaf,0,3,DEBUG,SqlParser,statements=1 durationMs=14
+2026-11-26 10:39:57.100,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,Planner,table=logs column=className comparison=EQUALS const=JoinOrderer partition=0 min=Engine max=StorageEngine decision=READ
+2026-11-26 10:39:57.104,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,Planner,table=runs partition=0 decision=READ reason=noPredicate
+2026-11-26 10:39:57.105,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,JoinOrderer,mode=optimized step=1 candidate=logs+runs on=sessionId=r_session inputRows=155/32 ndv=32/32 estRows=155
+2026-11-26 10:39:57.106,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,JoinOrderer,mode=optimized step=1 chosen=runs+logs estRows=155 build=runs probe=logs
+2026-11-26 10:39:57.106,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,Planner,statement=SELECT joinOrder=runs+logs mode=optimized estRows=155
+2026-11-26 10:39:57.108,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,ScanOperator,operator=Scan table=runs version=1 partitions=1
+2026-11-26 10:39:57.108,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,ScanOperator,operator=Scan table=logs version=1 partitions=1
+2026-11-26 10:39:57.132,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,HashJoinOperator,operator=HashJoin join=1 tables=runs+logs estRows=155 buildKey=0 probeKey=1 rowsBuild=32 rowsProbe=112 rowsOut=112
+2026-11-26 10:39:57.132,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,ScanOperator,operator=Scan table=runs partitionsRead=1 rowsOut=32
+2026-11-26 10:39:57.132,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,FilterOperator,operator=Filter column=5 comparison=EQUALS const=JoinOrderer rowsIn=1392 rowsOut=112
+2026-11-26 10:39:57.132,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,ScanOperator,operator=Scan table=logs partitionsRead=1 rowsOut=1392
+2026-11-26 10:39:57.133,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,Executor,statement=SELECT table=logs rowsOut=112 partitionsRead=1 partitionsPruned=0 version=1 durationMs=37
+2026-11-26 10:39:57.133,d3e6bad0-914b-4621-9b1e-569930c33aaf,1,3,DEBUG,Executor,statement=SELECT table=runs rowsOut=112 partitionsRead=1 partitionsPruned=0 version=1 durationMs=38
+2026-11-26 10:39:57.137,d3e6bad0-914b-4621-9b1e-569930c33aaf,0,3,DEBUG,Engine,engine stopped
