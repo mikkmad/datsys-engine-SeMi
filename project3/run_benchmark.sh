@@ -94,6 +94,29 @@ now_ms() {
     echo $(($(date +%s%N) / 1000000))
 }
 
+# Prints the number of logical CPU cores (Linux: nproc, macOS: sysctl).
+cpu_cores() {
+    nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "unknown"
+}
+
+# Prints the CPU model name (Linux: /proc/cpuinfo, macOS: sysctl).
+cpu_model() {
+    if [[ -r /proc/cpuinfo ]]; then
+        grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//'
+    else
+        sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "unknown"
+    fi
+}
+
+# Prints the total physical memory in GiB (Linux: /proc/meminfo, macOS: sysctl).
+total_memory() {
+    if [[ -r /proc/meminfo ]]; then
+        awk '/MemTotal/ { printf "%.1f GiB", $2 / 1048576 }' /proc/meminfo
+    else
+        sysctl -n hw.memsize 2>/dev/null | awk '{ printf "%.1f GiB", $1 / 1073741824 }'
+    fi
+}
+
 # Writes conditions.txt: everything the report must state once.
 write_conditions() {
     local commit dirty=""
@@ -102,9 +125,9 @@ write_conditions() {
     {
         echo "date:        $(date -Iseconds)"
         echo "commit:      $commit$dirty"
-        echo "machine:     $(uname -srm), $(nproc) cores"
-        echo "cpu:         $(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2 | sed 's/^ *//')"
-        echo "memory:      $(awk '/MemTotal/ { printf "%.1f GiB", $2 / 1048576 }' /proc/meminfo 2>/dev/null)"
+        echo "machine:     $(uname -srm), $(cpu_cores) cores"
+        echo "cpu:         $(cpu_model)"
+        echo "memory:      $(total_memory)"
         echo "jvm:         $(java -version 2>&1 | head -n 2 | tr '\n' ' ')"
         echo "heap:        -Xmx$HEAP"
         echo "data:        $(for t in customers orders shipments; do printf '%s=%s ' "$t" "$(wc -l < "$DATA_CSV_DIR/$t.csv" | tr -d ' ')"; done)"
