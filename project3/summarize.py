@@ -6,7 +6,7 @@ logs and runs (each row: the 7 log columns followed by r_session, r_config,
 r_repetition) and writes, into the same analysis directory:
 
     runtime_summary.csv   durationMs per configuration: n, median, min, q1, q3, max (+ wall-clock median)
-    runtime.svg           chart of end-to-end runtime per configuration, every run plotted
+    runtime.svg           bar chart of median runtime per configuration, min-max error bars, patterned bars
     intermediate_sizes.csv estRows vs. rowsOut per join and configuration, with the q-error
     results.md            both tables plus the chosen join orders, ready to paste into the report
 
@@ -196,55 +196,103 @@ def write_markdown(path, runtime_rows, join_rows):
 
 
 def nice_axis_max(value):
-    """Rounds a positive maximum up to 1, 2, or 5 times a power of ten."""
+    """Rounds a positive maximum up to 1, 1.5, 2, 2.5, 3, 4, 5, 6, or 8 times a power of ten.
+
+    The steps keep the five tick intervals round and the chart free of large empty space.
+    """
     magnitude = 10 ** (len(str(int(max(value, 1)))) - 1)
-    for step in (1, 2, 5, 10):
+    for step in (1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10):
         if value <= step * magnitude:
             return step * magnitude
     return 10 * magnitude
 
 
-def write_runtime_svg(path, durations, runtime_rows):
-    """Draws every measured run as a dot, the median as a bar, and the min-max range as a whisker."""
-    width, height, left, right, top, bottom = 760, 440, 80, 20, 40, 90
-    plot_width, plot_height = width - left - right, height - top - bottom
-    axis_max = nice_axis_max(max(row["max_ms"] for row in runtime_rows) * 1.05)
-    to_y = lambda ms: top + plot_height - ms / axis_max * plot_height
-    slot = plot_width / len(runtime_rows)
-    colors = {"min": "#2a9d8f", "max": "#e76f51", "opt_min_from": "#457b9d", "opt_max_from": "#8d6cab"}
-    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
-             f'font-family="sans-serif" font-size="12">',
-             f'<rect width="{width}" height="{height}" fill="white"/>',
-             f'<text x="{width / 2}" y="22" text-anchor="middle" font-size="15">'
-             f'Join-order benchmark: end-to-end runtime per configuration</text>']
+# Pastel background plus a darker pattern of the same hue per configuration, so bars stay
+# distinguishable without colour.
+BAR_STYLES = {
+    "min": ("#c4c4c4", ""),
+    "max": ("#a8d8f0", '<rect width="4" height="4" fill="#4b9fd5"/><rect x="4" y="4" width="4" height="4" '
+                       'fill="#4b9fd5"/>'),
+    "opt_min_from": ("#e2a8dc", '<path d="M0 2 H8 M0 6 H8" stroke="#a0509a" stroke-width="1"/>'),
+    "opt_max_from": ("#bfe39a", '<path d="M2 0 V8 M6 0 V8" stroke="#6aa63a" stroke-width="1"/>'),
+}
+DEFAULT_BAR_STYLE = ("#f0e2a8", '<path d="M0 8 L8 0" stroke="#b39a3a" stroke-width="1"/>')
+
+
+def svg_pattern_defs(configs):
+    """One 8x8 tiling pattern per configuration: a pastel background with same-hue marks on top."""
+    parts = ["<defs>"]
+    for config in configs:
+        color, marks = BAR_STYLES.get(config, DEFAULT_BAR_STYLE)
+        parts.append(f'<pattern id="fill-{config}" width="8" height="8" patternUnits="userSpaceOnUse">'
+                     f'<rect width="8" height="8" fill="{color}"/>{marks}</pattern>')
+    parts.append("</defs>")
+    return parts
+
+
+def svg_y_axis(left, right_edge, top, plot_height, axis_max, to_y):
+    """Horizontal grid lines with millisecond tick labels and the rotated y-axis title."""
+    parts = []
     for tick in range(6):
         ms = axis_max * tick / 5
         y = to_y(ms)
-        parts.append(f'<line x1="{left}" x2="{width - right}" y1="{y:.1f}" y2="{y:.1f}" stroke="#ddd"/>')
+        parts.append(f'<line x1="{left}" x2="{right_edge}" y1="{y:.1f}" y2="{y:.1f}" stroke="#ddd"/>')
         parts.append(f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end">{ms:,.0f}</text>')
     parts.append(f'<text transform="translate(22 {top + plot_height / 2}) rotate(-90)" text-anchor="middle">'
                  f'Runtime, durationMs (ms)</text>')
+    return parts
+
+
+def svg_bar_with_error_bar(row, center, bar_width, baseline_y, to_y):
+    """A patterned bar up to the median, a min-max whisker with caps, and a label with median and range."""
+    config, cap, whisker = row["config"], 8, 'stroke="#222" stroke-width="1"'
+    median_y, min_y, max_y = to_y(row["median_ms"]), to_y(row["min_ms"]), to_y(row["max_ms"])
+    return [
+        f'<rect x="{center - bar_width / 2:.1f}" y="{median_y:.1f}" width="{bar_width:.1f}" '
+        f'height="{baseline_y - median_y:.1f}" fill="url(#fill-{config})"/>',
+        f'<line x1="{center}" x2="{center}" y1="{min_y:.1f}" y2="{max_y:.1f}" {whisker}/>',
+        f'<line x1="{center - cap}" x2="{center + cap}" y1="{min_y:.1f}" y2="{min_y:.1f}" {whisker}/>',
+        f'<line x1="{center - cap}" x2="{center + cap}" y1="{max_y:.1f}" y2="{max_y:.1f}" {whisker}/>',
+        f'<text x="{center}" y="{max_y - 22:.1f}" text-anchor="middle" font-weight="bold">'
+        f'{row["median_ms"]:,.0f} ms</text>',
+        f'<text x="{center}" y="{max_y - 8:.1f}" text-anchor="middle" font-size="10" fill="#444">'
+        f'range {row["min_ms"]:,.0f}–{row["max_ms"]:,.0f}</text>',
+    ]
+
+
+def svg_category_labels(config, center, label_y):
+    """The configuration name and its join-order mode under the bar."""
+    mode = CONFIG_DESCRIPTIONS.get(config, "").split(", FROM ")[0]
+    return [f'<text x="{center}" y="{label_y}" text-anchor="middle" font-weight="bold" font-size="11">'
+            f'{config}</text>',
+            f'<text x="{center}" y="{label_y + 16}" text-anchor="middle" font-size="10">{mode}</text>']
+
+
+def write_runtime_svg(path, runtime_rows):
+    """Draws a bar chart: bar height is the median durationMs, the error bar spans min to max.
+
+    Bars are a fixed width with a fixed gap between them, so the chart width follows the bar count.
+    """
+    bar_width, bar_gap = 60, 30
+    slot = bar_width + bar_gap
+    height, left, right, top, bottom = 280, 80, 20, 50, 50
+    width = left + slot * len(runtime_rows) + right
+    plot_height = height - top - bottom
+    axis_max = nice_axis_max(max(row["max_ms"] for row in runtime_rows) * 1.12)
+    to_y = lambda ms: top + plot_height - ms / axis_max * plot_height
+    baseline_y = top + plot_height
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+             f'font-family="sans-serif" font-size="12">',
+             *svg_pattern_defs([row["config"] for row in runtime_rows]),
+             f'<rect width="{width}" height="{height}" fill="white"/>',
+             f'<text x="{width / 2}" y="22" text-anchor="middle" font-size="15">'
+             f'Join-order benchmark: end-to-end runtime per configuration</text>',
+             *svg_y_axis(left, width - right, top, plot_height, axis_max, to_y)]
     for index, row in enumerate(runtime_rows):
-        config, center = row["config"], left + slot * (index + 0.5)
-        color = colors.get(config, "#555")
-        parts.append(f'<line x1="{center}" x2="{center}" y1="{to_y(row["min_ms"]):.1f}" '
-                     f'y2="{to_y(row["max_ms"]):.1f}" stroke="{color}" stroke-width="1.5"/>')
-        parts.append(f'<line x1="{center - 28}" x2="{center + 28}" y1="{to_y(row["median_ms"]):.1f}" '
-                     f'y2="{to_y(row["median_ms"]):.1f}" stroke="{color}" stroke-width="4"/>')
-        for run_index, ms in enumerate(sorted(durations[config])):
-            jitter = (run_index % 5 - 2) * 5
-            parts.append(f'<circle cx="{center + jitter + 40}" cy="{to_y(ms):.1f}" r="3.5" fill="{color}" '
-                         f'fill-opacity="0.7"/>')
-        parts.append(f'<text x="{center}" y="{to_y(row["median_ms"]) - 8:.1f}" text-anchor="middle">'
-                     f'{row["median_ms"]:,.0f} ms</text>')
-        parts.append(f'<text x="{center}" y="{top + plot_height + 20}" text-anchor="middle" font-weight="bold">'
-                     f'{config}</text>')
-        parts.append(f'<text x="{center}" y="{top + plot_height + 36}" text-anchor="middle" font-size="10">'
-                     f'{CONFIG_DESCRIPTIONS.get(config, "").split(", FROM ")[0]}</text>')
-    parts.append(f'<line x1="{left}" x2="{width - right}" y1="{top + plot_height}" y2="{top + plot_height}" '
-                 f'stroke="#333"/>')
-    parts.append(f'<text x="{width / 2}" y="{height - 18}" text-anchor="middle">Configuration '
-                 f'(bar = median, whisker = min-max, dots = individual runs; n = {runtime_rows[0]["n"]} each)</text>')
+        center = left + slot * (index + 0.5)
+        parts += svg_bar_with_error_bar(row, center, bar_width, baseline_y, to_y)
+        parts += svg_category_labels(row["config"], center, baseline_y + 20)
+    parts.append(f'<line x1="{left}" x2="{width - right}" y1="{baseline_y}" y2="{baseline_y}" stroke="#333"/>')
     parts.append("</svg>")
     path.write_text("\n".join(parts) + "\n")
 
@@ -262,7 +310,7 @@ def main():
     write_csv(analysis_dir / "runtime_summary.csv", runtime_rows)
     write_csv(analysis_dir / "intermediate_sizes.csv", join_rows)
     write_markdown(analysis_dir / "results.md", runtime_rows, join_rows)
-    write_runtime_svg(analysis_dir / "runtime.svg", durations, runtime_rows)
+    write_runtime_svg(analysis_dir / "runtime.svg", runtime_rows)
     print((analysis_dir / "results.md").read_text())
     print(f"wrote runtime_summary.csv, intermediate_sizes.csv, results.md, runtime.svg to {analysis_dir}")
 
