@@ -1,0 +1,12 @@
+date:        2026-11-26T09:17:36+00:00
+commit:      02944fd677c955d87d7dc294e17238d31315264c
+machine:     Linux 7.2.11-200.fc44.x86_64 x86_64, 12 cores
+cpu:         AMD Ryzen 5 PRO 4650U with Radeon Graphics
+memory:      14.8 GiB
+jvm:         openjdk version "25.0.5" 2026-10-20 LTS OpenJDK Runtime Environment Temurin-25.0.5+8 (build 25.0.5+8-LTS) 
+heap:        -Xmx4g
+data:        customers=1000 orders=100000 shipments=100000 
+filter:      c_city = 'city042'
+configs:     min max opt_min_from opt_max_from
+repetitions: 1 warm-up (repetition 0, discarded) + 7 measured per configuration, interleaved
+conditions:  every execution is a new JVM (cold JIT); the OS page cache is warm after the warm-up

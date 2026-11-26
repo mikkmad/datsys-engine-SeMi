@@ -1,0 +1,3 @@
+# Generated benchmark data (reproduce with generate_data.py) and engine scratch dirs
+data/
+work/

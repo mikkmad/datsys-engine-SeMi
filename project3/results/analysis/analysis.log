@@ -1,0 +1,89 @@
+2026-11-26 09:18:58.563,1da755da-fe9d-41ac-83a6-f6a23400a5f5,0,3,DEBUG,Engine,engine started
+2026-11-26 09:18:58.703,1da755da-fe9d-41ac-83a6-f6a23400a5f5,0,3,DEBUG,SqlParser,statements=4 durationMs=45
+2026-11-26 09:18:58.709,1da755da-fe9d-41ac-83a6-f6a23400a5f5,1,3,DEBUG,StorageEngine,api=createTable table=logs
+2026-11-26 09:18:58.801,1da755da-fe9d-41ac-83a6-f6a23400a5f5,1,3,DEBUG,StorageEngine,table=logs version=0 columns=7
+2026-11-26 09:18:58.802,1da755da-fe9d-41ac-83a6-f6a23400a5f5,1,3,DEBUG,Executor,statement=CREATE_TABLE table=logs version=0 durationMs=97
+2026-11-26 09:18:58.802,1da755da-fe9d-41ac-83a6-f6a23400a5f5,2,3,DEBUG,StorageEngine,api=createTable table=runs
+2026-11-26 09:18:58.804,1da755da-fe9d-41ac-83a6-f6a23400a5f5,2,3,DEBUG,StorageEngine,table=runs version=0 columns=3
+2026-11-26 09:18:58.805,1da755da-fe9d-41ac-83a6-f6a23400a5f5,2,3,DEBUG,Executor,statement=CREATE_TABLE table=runs version=0 durationMs=2
+2026-11-26 09:18:58.816,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,api=copyFile table=logs file=/var/home/mikma/Projects/java/SeMi/project3/work/benchmark-logs.csv
+2026-11-26 09:18:58.962,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=timestamp min=2026-11-26 09:17:43.285 max=2026-11-26 09:18:47.967
+2026-11-26 09:18:58.964,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=timestamp rows=1392 ndv=579
+2026-11-26 09:18:58.965,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=sessionId min=157c494d-6d73-4f84-8952-5f5b4dd4b902 max=f97b8f1e-4142-417b-bcd9-966751bca64b
+2026-11-26 09:18:58.966,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=sessionId rows=1392 ndv=32
+2026-11-26 09:18:58.967,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=statementNumber min=0 max=1
+2026-11-26 09:18:58.968,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=statementNumber rows=1392 ndv=2
+2026-11-26 09:18:58.969,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=threadId min=3 max=3
+2026-11-26 09:18:58.969,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=threadId rows=1392 ndv=1
+2026-11-26 09:18:58.971,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logLevel min=DEBUG max=DEBUG
+2026-11-26 09:18:58.971,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logLevel rows=1392 ndv=1
+2026-11-26 09:18:58.972,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=className min=Engine max=StorageEngine
+2026-11-26 09:18:58.972,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=className rows=1392 ndv=9
+2026-11-26 09:18:58.974,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logMessage min=engine started max=table=shipments version=1 retainedVersions=2 loaded
+2026-11-26 09:18:58.974,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs partition=0 column=logMessage rows=1392 ndv=138
+2026-11-26 09:18:58.990,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,StorageEngine,table=logs file=benchmark-logs.csv rows=1392 partitions=1 version=1 durationMs=173
+2026-11-26 09:18:58.991,1da755da-fe9d-41ac-83a6-f6a23400a5f5,3,3,DEBUG,Executor,statement=COPY table=logs file=/var/home/mikma/Projects/java/SeMi/project3/work/benchmark-logs.csv rows=1392 partitions=1 version=1 durationMs=186
+2026-11-26 09:18:59.003,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,api=copyFile table=runs file=/var/home/mikma/Projects/java/SeMi/project3/results/runs.csv
+2026-11-26 09:18:59.007,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_session min=157c494d-6d73-4f84-8952-5f5b4dd4b902 max=f97b8f1e-4142-417b-bcd9-966751bca64b
+2026-11-26 09:18:59.008,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_session rows=32 ndv=32
+2026-11-26 09:18:59.008,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_config min=max max=opt_min_from
+2026-11-26 09:18:59.008,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_config rows=32 ndv=4
+2026-11-26 09:18:59.008,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_repetition min=0 max=7
+2026-11-26 09:18:59.009,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,table=runs partition=0 column=r_repetition rows=32 ndv=8
+2026-11-26 09:18:59.011,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,StorageEngine,table=runs file=runs.csv rows=32 partitions=1 version=1 durationMs=7
+2026-11-26 09:18:59.011,1da755da-fe9d-41ac-83a6-f6a23400a5f5,4,3,DEBUG,Executor,statement=COPY table=runs file=/var/home/mikma/Projects/java/SeMi/project3/results/runs.csv rows=32 partitions=1 version=1 durationMs=8
+2026-11-26 09:18:59.011,1da755da-fe9d-41ac-83a6-f6a23400a5f5,0,3,DEBUG,Engine,engine stopped
+2026-11-26 09:18:59.839,224203d9-4bdf-4057-8407-99a9ab1d5858,0,3,DEBUG,Engine,engine started
+2026-11-26 09:19:00.049,224203d9-4bdf-4057-8407-99a9ab1d5858,0,3,DEBUG,StorageEngine,table=runs version=1 retainedVersions=2 loaded
+2026-11-26 09:19:00.053,224203d9-4bdf-4057-8407-99a9ab1d5858,0,3,DEBUG,StorageEngine,table=logs version=1 retainedVersions=2 loaded
+2026-11-26 09:19:00.106,224203d9-4bdf-4057-8407-99a9ab1d5858,0,3,DEBUG,SqlParser,statements=1 durationMs=45
+2026-11-26 09:19:00.125,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,Planner,table=logs column=className comparison=EQUALS const=HashJoinOperator partition=0 min=Engine max=StorageEngine decision=READ
+2026-11-26 09:19:00.137,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,Planner,table=runs partition=0 decision=READ reason=noPredicate
+2026-11-26 09:19:00.141,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,JoinOrderer,mode=optimized step=1 candidate=logs+runs on=sessionId=r_session inputRows=155/32 ndv=32/32 estRows=155
+2026-11-26 09:19:00.144,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,JoinOrderer,mode=optimized step=1 chosen=runs+logs estRows=155 build=runs probe=logs
+2026-11-26 09:19:00.146,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,Planner,statement=SELECT joinOrder=runs+logs mode=optimized estRows=155
+2026-11-26 09:19:00.153,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,ScanOperator,operator=Scan table=runs version=1 partitions=1
+2026-11-26 09:19:00.153,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,ScanOperator,operator=Scan table=logs version=1 partitions=1
+2026-11-26 09:19:00.230,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,HashJoinOperator,operator=HashJoin join=1 tables=runs+logs estRows=155 buildKey=0 probeKey=1 rowsBuild=32 rowsProbe=64 rowsOut=64
+2026-11-26 09:19:00.230,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,ScanOperator,operator=Scan table=runs partitionsRead=1 rowsOut=32
+2026-11-26 09:19:00.230,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,FilterOperator,operator=Filter column=5 comparison=EQUALS const=HashJoinOperator rowsIn=1392 rowsOut=64
+2026-11-26 09:19:00.231,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,ScanOperator,operator=Scan table=logs partitionsRead=1 rowsOut=1392
+2026-11-26 09:19:00.233,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,Executor,statement=SELECT table=logs rowsOut=64 partitionsRead=1 partitionsPruned=0 version=1 durationMs=126
+2026-11-26 09:19:00.233,224203d9-4bdf-4057-8407-99a9ab1d5858,1,3,DEBUG,Executor,statement=SELECT table=runs rowsOut=64 partitionsRead=1 partitionsPruned=0 version=1 durationMs=126
+2026-11-26 09:19:00.247,224203d9-4bdf-4057-8407-99a9ab1d5858,0,3,DEBUG,Engine,engine stopped
+2026-11-26 09:19:00.971,9abc3e77-f4ac-407b-81e7-9509d8d198fc,0,3,DEBUG,Engine,engine started
+2026-11-26 09:19:01.178,9abc3e77-f4ac-407b-81e7-9509d8d198fc,0,3,DEBUG,StorageEngine,table=runs version=1 retainedVersions=2 loaded
+2026-11-26 09:19:01.181,9abc3e77-f4ac-407b-81e7-9509d8d198fc,0,3,DEBUG,StorageEngine,table=logs version=1 retainedVersions=2 loaded
+2026-11-26 09:19:01.233,9abc3e77-f4ac-407b-81e7-9509d8d198fc,0,3,DEBUG,SqlParser,statements=1 durationMs=44
+2026-11-26 09:19:01.252,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,Planner,table=logs column=className comparison=EQUALS const=Executor partition=0 min=Engine max=StorageEngine decision=READ
+2026-11-26 09:19:01.264,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,Planner,table=runs partition=0 decision=READ reason=noPredicate
+2026-11-26 09:19:01.269,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,JoinOrderer,mode=optimized step=1 candidate=logs+runs on=sessionId=r_session inputRows=155/32 ndv=32/32 estRows=155
+2026-11-26 09:19:01.272,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,JoinOrderer,mode=optimized step=1 chosen=runs+logs estRows=155 build=runs probe=logs
+2026-11-26 09:19:01.274,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,Planner,statement=SELECT joinOrder=runs+logs mode=optimized estRows=155
+2026-11-26 09:19:01.280,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,ScanOperator,operator=Scan table=runs version=1 partitions=1
+2026-11-26 09:19:01.280,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,ScanOperator,operator=Scan table=logs version=1 partitions=1
+2026-11-26 09:19:01.354,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,HashJoinOperator,operator=HashJoin join=1 tables=runs+logs estRows=155 buildKey=0 probeKey=1 rowsBuild=32 rowsProbe=96 rowsOut=96
+2026-11-26 09:19:01.354,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,ScanOperator,operator=Scan table=runs partitionsRead=1 rowsOut=32
+2026-11-26 09:19:01.355,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,FilterOperator,operator=Filter column=5 comparison=EQUALS const=Executor rowsIn=1392 rowsOut=96
+2026-11-26 09:19:01.355,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,ScanOperator,operator=Scan table=logs partitionsRead=1 rowsOut=1392
+2026-11-26 09:19:01.357,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,Executor,statement=SELECT table=logs rowsOut=96 partitionsRead=1 partitionsPruned=0 version=1 durationMs=123
+2026-11-26 09:19:01.358,9abc3e77-f4ac-407b-81e7-9509d8d198fc,1,3,DEBUG,Executor,statement=SELECT table=runs rowsOut=96 partitionsRead=1 partitionsPruned=0 version=1 durationMs=124
+2026-11-26 09:19:01.367,9abc3e77-f4ac-407b-81e7-9509d8d198fc,0,3,DEBUG,Engine,engine stopped
+2026-11-26 09:19:02.090,df0c3b43-2d3f-49fa-ace7-81819d3660eb,0,3,DEBUG,Engine,engine started
+2026-11-26 09:19:02.292,df0c3b43-2d3f-49fa-ace7-81819d3660eb,0,3,DEBUG,StorageEngine,table=runs version=1 retainedVersions=2 loaded
+2026-11-26 09:19:02.294,df0c3b43-2d3f-49fa-ace7-81819d3660eb,0,3,DEBUG,StorageEngine,table=logs version=1 retainedVersions=2 loaded
+2026-11-26 09:19:02.343,df0c3b43-2d3f-49fa-ace7-81819d3660eb,0,3,DEBUG,SqlParser,statements=1 durationMs=42
+2026-11-26 09:19:02.361,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,Planner,table=logs column=className comparison=EQUALS const=JoinOrderer partition=0 min=Engine max=StorageEngine decision=READ
+2026-11-26 09:19:02.372,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,Planner,table=runs partition=0 decision=READ reason=noPredicate
+2026-11-26 09:19:02.377,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,JoinOrderer,mode=optimized step=1 candidate=logs+runs on=sessionId=r_session inputRows=155/32 ndv=32/32 estRows=155
+2026-11-26 09:19:02.380,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,JoinOrderer,mode=optimized step=1 chosen=runs+logs estRows=155 build=runs probe=logs
+2026-11-26 09:19:02.382,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,Planner,statement=SELECT joinOrder=runs+logs mode=optimized estRows=155
+2026-11-26 09:19:02.387,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,ScanOperator,operator=Scan table=runs version=1 partitions=1
+2026-11-26 09:19:02.387,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,ScanOperator,operator=Scan table=logs version=1 partitions=1
+2026-11-26 09:19:02.464,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,HashJoinOperator,operator=HashJoin join=1 tables=runs+logs estRows=155 buildKey=0 probeKey=1 rowsBuild=32 rowsProbe=112 rowsOut=112
+2026-11-26 09:19:02.465,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,ScanOperator,operator=Scan table=runs partitionsRead=1 rowsOut=32
+2026-11-26 09:19:02.465,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,FilterOperator,operator=Filter column=5 comparison=EQUALS const=JoinOrderer rowsIn=1392 rowsOut=112
+2026-11-26 09:19:02.465,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,ScanOperator,operator=Scan table=logs partitionsRead=1 rowsOut=1392
+2026-11-26 09:19:02.467,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,Executor,statement=SELECT table=logs rowsOut=112 partitionsRead=1 partitionsPruned=0 version=1 durationMs=123
+2026-11-26 09:19:02.467,df0c3b43-2d3f-49fa-ace7-81819d3660eb,1,3,DEBUG,Executor,statement=SELECT table=runs rowsOut=112 partitionsRead=1 partitionsPruned=0 version=1 durationMs=123
+2026-11-26 09:19:02.476,df0c3b43-2d3f-49fa-ace7-81819d3660eb,0,3,DEBUG,Engine,engine stopped
